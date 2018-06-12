@@ -510,14 +510,13 @@ An *anonymous_method_expression* or *lambda_expression* is classified as an anon
 
 For the purpose of brevity, this section uses the short form for the task types `Task` and `Task<T>` ([Async functions](classes.md#async-functions)).
 
-A lambda expression `F` is compatible with an expression tree type `Expression<D>` if `F` is compatible with the delegate type `D`. Note that this does not apply to anonymous methods, only lambda expressions.
+A lambda expression `F` is compatible with an expression tree type `E<D>` if `F` is compatible with the delegate type `D`. Note that this does not apply to anonymous methods, only lambda expressions.
 
-Certain lambda expressions cannot be converted to expression tree types: Even though the conversion *exists*, it fails at compile-time. This is the case if the lambda expression:
+Certain lambda expressions cannot be converted to expression tree types: Even though the conversion *exists*, it fails at compile-time. This is the case if the translation steps to convert a lambda expression to an [Expression tree types](types.md#expression-tree-types)):
 
-*  Has a *block* body
-*  Contains simple or compound assignment operators
-*  Contains a dynamically bound expression
-*  Is async
+*  are omitted from the specification, or,
+*  explicitly state that conversion is not allowed, or,
+*  yield a translation that fails to compile (for instance, due to missing methods on expression builder types).
 
 The examples that follow use a generic delegate type `Func<A,R>` which represents a function that takes an argument of type `A` and returns a value of type `R`:
 ```csharp
@@ -577,11 +576,14 @@ Since the two anonymous function delegates have the same (empty) set of captured
 
 ### Evaluation of anonymous function conversions to expression tree types
 
-Conversion of an anonymous function to an expression tree type produces an expression tree ([Expression tree types](types.md#expression-tree-types)). More precisely, evaluation of the anonymous function conversion leads to the construction of an object structure that represents the structure of the anonymous function itself. The precise structure of the expression tree, as well as the exact process for creating it, are implementation defined.
+Conversion of an anonymous function to an expression tree type produces an expression tree ([Expression tree types](types.md#expression-tree-types)). More precisely, evaluation of the anonymous function conversion leads to the construction of an object structure that represents the structure of the anonymous function itself. The translation steps to convert an anonymous function to an expression tree are specified in terms of a syntactic mapping for each language construct, using the following shorthand:
+
+* `Expression` is used to refer to `System.Linq.Expressions.Expression` when specifying the conversion translation of an expression tree to a query expression tree type.
+* `Q` is used to refer to the builder type of a generalized expression tree type `Quote<D>` used when specifying the conversion translation of an expression tree to `Quote<D>`.
 
 ### Implementation example
 
-This section describes a possible implementation of anonymous function conversions in terms of other C# constructs. The implementation described here is based on the same principles used by the Microsoft C# compiler, but it is by no means a mandated implementation, nor is it the only one possible. It only briefly mentions conversions to expression trees, as their exact semantics are outside the scope of this specification.
+This section describes a possible implementation of anonymous function conversions in terms of other C# constructs. The implementation described here is based on the same principles used by the Microsoft C# compiler, but it is by no means a mandated implementation, nor is it the only one possible.
 
 The remainder of this section gives several examples of code that contains anonymous functions with different characteristics. For each example, a corresponding translation to code that uses only other C# constructs is provided. In the examples, the identifier `D` is assumed by represent the following delegate type:
 ```csharp

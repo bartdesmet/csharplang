@@ -622,36 +622,101 @@ As a type, type parameters are purely a compile-time construct. At run-time, eac
 
 ## Expression tree types
 
-***Expression trees*** permit lambda expressions to be represented as data structures instead of executable code. Expression trees are values of ***expression tree types*** of the form `System.Linq.Expressions.Expression<D>`, where `D` is any delegate type. For the remainder of this specification we will refer to these types using the shorthand `Expression<D>`.
+***Expression trees*** permit lambda expressions to be represented as data structures instead of executable code. Expression trees are values of ***expression tree types*** which are constructed types of the form `E<D>` with exactly only type argument `D`, where `D` is any delegate type, and are further divided into two categories.
 
-If a conversion exists from a lambda expression to a delegate type `D`, a conversion also exists to the expression tree type `Expression<D>`. Whereas the conversion of a lambda expression to a delegate type generates a delegate that references executable code for the lambda expression, conversion to an expression tree type creates an expression tree representation of the lambda expression.
+Expression tree types matching `System.Linq.Expressions.Expression<D>` are ***query expression tree types***. For the remainder of this specification we will refer to these types using the shorthand `Expression<D>`.
 
-Expression trees are efficient in-memory data representations of lambda expressions and make the structure of the lambda expression transparent and explicit.
+Expression tree types are ***generalized expression tree types*** if `E<D>` has an associated ***expression tree builder type*** identified with `System.Runtime.CompilerServices.ExpressionBuilderAttribute`. For the remainder of this specification we will refer to these types using the shorthand `Quote<D>`, and to the builder attribute as `ExpressionBuilder`.
 
-Just like a delegate type `D`, `Expression<D>` is said to have parameter and return types, which are the same as those of `D`.
+If the single type parameter on `E<>` has [Type parameter constraints](classes.md#type-parameter-constraints) that cannot satisfy assignment with a delegate type, `E<D>` is not classified as an expression tree type.
 
-The following example represents a lambda expression both as executable code and as an expression tree. Because a conversion exists to `Func<int,int>`, a conversion also exists to `Expression<Func<int,int>>`:
+> The distinction between query expression trees types and generalized expression tree types is used to specify the rules for construction expression trees. Query expression tree types retain compatibility with expression trees introduced in C# 3.0 to support (LINQ) query expressions. Generalized expression tree types support higher fidelity expression trees and more language features (such as statements, blocks, and language features introduced after C# 3.0). We refer to the latter types using the `Quote<D>` shorthand to emphasize their potential to "quote" language constructs beyond expressions.
+
+The ***expression tree builder type*** `Q` is derived from a generalized expression tree type `Quote<D>` by obtaining the type specified in the single argument on the `ExpressionBuilder` custom attribute applied to `Quote<D>`. Base types of `Quote<D>` are not considered to locate the `ExpressionBuilder` attribute.
+
+No constraints are imposed on the expression tree builder type for purposes of classifying a type as a generalized expression tree type.
+
+```csharp
+namespace System.Runtime.CompilerServices
+{
+    [AttributeUsage(AttributeTargets.Class)]
+    public class ExpressionBuilderAttribute : Attribute
+    {
+        public ExpressionBuilderAttribute(Type builderType) {}
+    }
+}
+```
+
+For example:
+
+```csharp
+[ExpressionBuilder(typeof(Quote))]
+class Quote<D>
+{
+}
+
+class Quote
+{
+}
+```
+
+The expression tree builder type for a query expression tree type `Expression<D>` is undefined even if this attribute is applied to the type. That is, query expression tree types can never be treated as generalized expression tree types.
+
+If a conversion exists from a lambda expression to a delegate type `D`, a conversion also exists to the expression tree type `E<D>`. Whereas the conversion of a lambda expression to a delegate type generates a delegate that references executable code for the lambda expression, conversion to an expression tree type creates an expression tree representation of the lambda expression.
+
+Expression trees are in-memory data representations of lambda expressions and make the structure of the lambda expression transparent and explicit.
+
+Just like a delegate type `D`, `E<D>` is said to have parameter and return types, which are the same as those of `D`.
+
+The following example represents a lambda expression both as executable code and as an expression tree. Because a conversion exists to `Func<int,int>`, a conversion also exists to any expression tree type `E<Func<int,int>>`. In particular, given the definitions above:
 
 ```csharp
 Func<int,int> del = x => x + 1;                    // Code
 
-Expression<Func<int,int>> exp = x => x + 1;        // Data
+Expression<Func<int,int>> exp1 = x => x + 1;       // Data
+Quote<Func<int,int>> exp2 = x => x + 1;            // Data
 ```
 
-Following these assignments, the delegate `del` references a method that returns `x + 1`, and the expression tree `exp` references a data structure that describes the expression `x => x + 1`.
+Following these assignments, the delegate `del` references a method that returns `x + 1`, and the expression trees `exp1` and `exp2` each reference a data structure that describes the expression `x => x + 1`.
 
-The exact definition of the generic type `Expression<D>` as well as the precise rules for constructing an expression tree when a lambda expression is converted to an expression tree type, are both outside the scope of this specification.
+The rules for constructing an expression tree when a lambda expression is converted to an expression tree type are described in this specification by providing expression tree conversion translation steps for language constructs supported in expression trees. Language constructs for which such translation steps are omitted are not supported in expression trees. The language does not prescribe the exact definition of types in expression tree libraries other than the expression tree conversion translation steps described in this specification.
+
+The translation of expression trees is a syntactic mapping that occurs before any type binding or overload resolution has been performed. The translation is guaranteed to be syntactically correct, but it is not guaranteed to produce semantically correct C# code. Following translation of expression trees, the resulting code is processed as regular code, and this may in turn uncover errors, for example if methods do not exist, if arguments have wrong types, or if methods are generic and type inference fails.
+
+For example, given the definitions above, the expression tree translation of `exp1` and `exp2` is:
+
+```csharp
+var t0 = Expression.Parameter(typeof(int), "x");
+Expression<Func<int,int>> exp1 =
+    Expression.Lambda<Func<int,int>>(
+        Expression.Add(
+            t0,
+            Expression.Constant(1, typeof(int))
+        )
+    );
+
+var t1 = Quote.Parameter(typeof(int), "x");
+Quote<Func<int,int>> exp2 =
+    Quote.Lambda<Func<int,int>>(
+        Quote.Add(
+            t1,
+            Quote.Constant(1, typeof(int))
+        )
+    );
+```
+
+For the remainder of this specification we will refer to the expression tree builder type of a generalized expression tree type as `Q`, and to the `System.Linq.Expressions.Expression` class used for translation of query expression trees as `Expression`.
 
 Two things are important to make explicit:
 
-*  Not all lambda expressions can be converted to expression trees. For instance, lambda expressions with statement bodies, and lambda expressions containing assignment expressions cannot be represented. In these cases, a conversion still exists, but will fail at compile-time. These exceptions are detailed in [Anonymous function conversions](conversions.md#anonymous-function-conversions).
+*  Not all lambda expressions can be converted to expression trees. For instance, lambda expressions with statement bodies, and lambda expressions containing assignment expressions cannot be represented when converted to a query expression tree type. In these cases, a conversion still exists, but will fail at compile-time. For more remarks, refer to [Anonymous function conversions](conversions.md#anonymous-function-conversions).
 *   `Expression<D>` offers an instance method `Compile` which produces a delegate of type `D`:
 
     ```csharp
-    Func<int,int> del2 = exp.Compile();
+    Func<int,int> del2 = exp1.Compile();
     ```
 
-    Invoking this delegate causes the code represented by the expression tree to be executed. Thus, given the definitions above, del and del2 are equivalent, and the following two statements will have the same effect:
+    Invoking this delegate causes the code represented by the expression tree to be executed. Thus, given the definitions above, `del` and `del2` are equivalent, and the following two statements will have the same effect:
 
     ```csharp
     int i1 = del(1);
