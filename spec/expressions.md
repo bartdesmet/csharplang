@@ -426,6 +426,160 @@ The *argument_value* can take one of the following forms:
 *  An *expression*, indicating that the argument is passed as a value parameter ([Value parameters](classes.md#value-parameters)).
 *  The keyword `ref` followed by a *variable_reference* ([Variable references](variables.md#variable-references)), indicating that the argument is passed as a reference parameter ([Reference parameters](classes.md#reference-parameters)). A variable must be definitely assigned ([Definite assignment](variables.md#definite-assignment)) before it can be passed as a reference parameter. The keyword `out` followed by a *variable_reference* ([Variable references](variables.md#variable-references)), indicating that the argument is passed as an output parameter ([Output parameters](classes.md#output-parameters)). A variable is considered definitely assigned ([Definite assignment](variables.md#definite-assignment)) following a function member invocation in which the variable is passed as an output parameter.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> For purposes of conversion to an expression tree, an *argument_list*
+>
+> ```antlr
+> argument_list
+>     : argument (',' argument)*
+>     ;
+> ```
+>
+> is preprocessed into
+>
+> ```antlr
+> argument_list
+>     : no_params_argument_list
+>     | raw_argument_list? params_argument_list
+>     ;
+>
+> no_params_argument_list
+>     : raw_argument_list
+>     ;
+>
+> params_argument_list
+>     : 'new' array_type params_array_initializer
+>     ;
+>
+> params_array_initializer
+>     : '{' params_array_argument_list? '}'
+>     ;
+>
+> params_array_argument_list
+>     : argument_expression (',' argument_expression)*
+>     ;
+>
+> raw_argument_list
+>     : argument (',' argument)*
+>     ;
+>
+> argument
+>     : argument_name? argument_value
+>     ;
+>
+> argument_value
+>     : argument_expression
+>     | 'ref' variable_reference
+>     | 'out' variable_reference
+>     ;
+>
+> argument_expression
+>     : converted_argument_expression
+>     | expression
+>     ;
+>
+> converted_argument_expression
+>     : '(' type ')' '(' expression ')'
+>     ;
+> ```
+>
+> by inspecting the bound parent of the argument list for:
+>
+> * translation of a [parameter array](classes.md#parameter-arrays) binding using the expanded form (see [Applicable function member](#applicable-function-member) and [
+Run-time evaluation of argument lists](#run-time-evaluation-of-argument-lists)) to *params_argument_list*, where *array_type* is the array type of the corresponding `params` parameter (see [Corresponding parameters](#corresponding-parameters)), and,
+> * translation of any implicit conversion used for binding an argument to a parameter to *converted_argument_expression* where *type* is the conversion target type, following the rules in [Applicable function member](#applicable-function-member).
+>
+> For example, given
+>
+> ```csharp
+> class C
+> {
+>     public static void F(int x, params long[] ys) {}
+> }
+> ```
+>
+> an argument list `i1, i2, i3` with expressions `i1`, `i2`, and `i3` of type `int` used in a method invocation expression `C.F(i1, i2, i3)` is preprocessed to `i1, new long[] { (long)i2, (long)i3 }`.
+>
+> This pre-processing step effectively makes implicit conversions and the use of `params` explicit. Productions `params_argument_list` and `converted_argument_expression` are classified as ***compiler-generated*** and their translation to generalized expression trees will include a `Q.Flags.CompilerGenerated` flag.
+>
+> After applying this pre-processing step, which may introduce an [array creation expression](#array-creation-expressions) and zero or more [cast expressions](#cast-expression), translation to expression trees proceeds as follows.
+>
+> For all expression trees, an *argument_value* is translated by translating the *expression* or *variable_reference*.
+>
+> An *argument*
+>
+> ```antlr
+> argument_name? argument_value
+> ```
+>
+> for purposes of conversion to a query expression tree, is translated by translating *argument_value*, unless an *argument_name* is specified, in which case an error is reported.
+>
+> For purposes of conversion to a generalized expression tree, it is translated into
+>
+> ```csharp
+> argument_value_expr
+> ```
+>
+> if the containing *argument_list* is bound to an [array access](#array-access), or translated into
+>
+> ```csharp
+> Q.ParameterBinding(flags, method, index, argument_value_expr)
+> ```
+>
+> if the containing *argument_list* is bound to a method, constructor, delegate, or indexer, where
+>
+> * `flags` is the bitwise `|` combination of any of the following:
+>   * `Q.ParameterBindingFlags.Named` if *argument_name* is specified,
+>   * `Q.ParameterBindingFlags.Ref` if *argument_value* is `ref` *variable_reference*,
+>   * `Q.ParameterBindingFlags.Out` if *argument_value* is `out` *variable_reference*,
+>   * `Q.ParameterBindingFlags.Params` if the argument is assigned to a `params` parameter that was constructed from the expanded form,
+>   * or `default(Q.ParameterBindingFlags)` if no flags apply;
+> * `method` is an expression of type `MethodBase` representing the method to which the argument list is bound:
+>    * for [method invocations](#method-invocations) and [extension method invocations](#extension-method-invocations), `method` is the bound method,
+>    * for [delegate invocations](#delegate-invocations), `method` corresponds to the `Invoke` instance method defined on the target delegate type,
+>    * for [indexer access](#indexer-access), `method` corresponds to the *get accessor* on the bound indexer, and,
+>    * for [object creation](#object-creation-expressions), `method` corresponds to the bound constructor;
+> * `index` is the zero-based index of the parameter corresponding to the argument (see [Corresponding parameters](#corresponding-parameters));
+> * `argument_value_expr` is the result of translating *argument_value*,
+>
+> or translated into
+>
+> ```csharp
+> Q.ParameterBinding(argument_info, argument_value_expr)
+> ```
+>
+> if the containing *argument_list* is used for a dynamic operation (see [Dynamic binding](#dynamic-binding)), where
+>
+> * `argument_info` is an expression of type `Microsoft.CSharp.RuntimeBinder.CSharpArgumentInfo`;
+> * `argument_value_expr` is the result of translating *argument_value*.
+>
+> Finally, a *raw_argument_list*, for purposes of conversion to a query expression tree is translated into
+>
+> ```csharp
+> new System.Linq.Expressions.Expression[] { argument_expr (',' argument_expr)* }
+> ```
+>
+> or, for purposes of conversion to a generalized expression tree, is translated into a syntactic fragment
+>
+> ```csharp
+> Q.ArgumentList(argument_expr (',' argument_expr))
+> ```
+>
+> where `argument_expr` is the result of translating the corresponding `argument`.
+>
+> Note that the translation for a generalized expression tree produces an invocation to `Q.ArgumentList`. In particular, the translation does not produce an array creation expression. This serves two purposes:
+>
+> * The use of an implicitly typed array creation expression would require [Finding the best common type of a set of expressions](expressions.md#finding-the-best-common-type-of-a-set-of-expressions) rules to be applied immediately to the resulting expression representation of an argument list.
+> * Representation of argument lists with few arguments cannot be represented in a more efficient manner than an array. For instance, a method invocation expression involving zero to four arguments could bind to optimized overloads of `Q.ArgumentList`, while invocations with more arguments could bind to a `params` array overload.
+>
+> ***TODO***
+>
+> * Check implicit conversion behavior on arguments, e.g. do we need to filter out identity conversions, reference conversions, etc.?
+> * Create a specification for `argument_info` used in dynamic operations.
+> * Review an alternative where generalizd expression trees produce a syntactic fragment `(',' argument_expr)*` that's embedded in the parent node's expression tree representation. That is, a world where argument lists are not first-class nodes (as was the case for query expression trees). Note that many nodes can benefit from a first-class representation of argument lists.
+
+
 #### Corresponding parameters
 
 For each argument in an argument list there has to be a corresponding parameter in the function member or delegate being invoked.
@@ -1007,6 +1161,31 @@ object o = (new int[3])[1];
 
 A *primary_expression* that consists of a *literal* ([Literals](lexical-structure.md#literals)) is classified as a value.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> A *literal* expression
+>
+> ```csharp
+> literal
+> ```
+>
+> when subject to conversion to a query expression tree, is translated into
+>
+> ```csharp
+> Expression.Constant(literal, type)
+> ```
+>
+> and when subject to conversion to a generalized expression tree, is translated into
+>
+> ```csharp
+> Q.Constant(flags, literal, type)
+> ```
+>
+> where `type` is an expression of type `Type` representing the static type of the value of the literal, and where `flags` is an expression of type `Q.Flags`:
+>
+> * `default(Q.Flags)` if no flags apply, or,
+> * `Q.CompilerGenerated` if the node was compiler-generated (for instance, when translating an optional parameter).
+
 
 ### Interpolated strings
 
@@ -1062,6 +1241,82 @@ The subsequent arguments are simply the *expressions* from the *interpolations* 
 
 TODO: examples.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> When subject to conversion to a query expression tree, an interpolated string expression is pre-processed by first rewriting the expression to a method invocation expression of `string.Format` or `System.Runtime.CompilerServices.FormattableStringFactory.Create`, as described above. The resulting expression is then translated to an expression tree, resulting in an `Expression.Call` factory invocation.
+>
+> A few things are worth making explicit:
+>
+> * Query expression trees representing interpolated strings are always represented using a `Call` expression node, without any further `Convert` node applied to it. Therefore, the type of the expression node will match the return type of the bound method, which is either `string` or `System.FormattableString`. In particular, an interpolated string converted to `System.IFormattable` will have the more derived `System.FormattableString` type on its expression tree representation.
+> * Overload resolution rules apply after the rewrite step. For instance, an interpolated string `$"{a}{b}"` will bind to the `string.Format(string, object, object)` overload, but interpolated string `$"{a}{b}{c}{d}"` will bind to the `string.Format(string, object[])` overload, thus resulting in the use of a `NewArrayInit` expression node to construct the `params` array.
+> * After binding to any of the methods listed above, regular conversion rules apply for argument assignment. For instance, an interpolated string `$"{42}"` will have the boxing conversion of `42` represented by a `Convert` expression node. No conversions are emitted for interpolations that have a reference type, because an implicit conversion to `object` exists.
+> * Interpolated strings containing interpolations with constant expressions may be subject to implementation-dependent compile-time optimizations prior to being rewritten to a method invocation expression. For instance, an interpolated string `$"A{"B"}C"` may get optimized to a constant string with value `"ABC"` which gets further translated to a `Cosntant` expression node.
+>
+> When subject to conversion to a query expression tree, an interpolated string expression is translated as follows. First, each interpolation of the form
+>
+> ```
+> {<interpolatedExpression>[,<alignment>][:<formatString>]}
+> ```
+>
+> is translated by first translating `interpolatedExpression` to an expression tree `intExpr`, and (if present) translating `alignment` to an expression tree `alignExpr`. The interpolation is then translated into
+>
+> ```csharp
+> Q.InterpolationExpression(info, intExpr)
+> ```
+>
+> if no `alignment` is specified, or
+>
+> ```csharp
+> Q.InterpolationExpression(info, intExpr, alignmentExpr)
+> ```
+>
+> otherwise, where `info` is
+>
+> ```csharp
+> Q.InterpolationExpressionInfo(formatString)
+> ```
+>
+> if a `formatString` is specified, and where `formatString` is represented as an expression of type `string` containing the string representation of the format string, or
+>
+> ```csharp
+> Q.InterpolationExpressionInfo()
+> ```
+>
+> otherwise.
+>
+> Note that `alignment` is translated to an expression tree, and not to an expression of type `int` passed to `InterpolationInfo`. Generalized expression tree conversion suppresses compile-time evaluation of constant expressions in order to retain the original syntactic structure of the code, offering the highest degree of flexibility to expression tree libraries. Note that `formatString` is translated to an expression of type `string` passed to `InterpolationInfo` because the lexical structure of interpolated strings only allows literal strings for that part.
+>
+> Next, each literal string fragment occurring before the first interpolation, in between any two interpolations, and after the last interpolation is translated into
+>
+> ```csharp
+> Q.InterpolationLiteral(str)
+> ```
+>
+> where `str` is an expression of type `string` containing the string representation of the literal string fragment (in particular, escape sequences have been processed).
+>
+> Finally, the interpolated string expression is converted to an expression tree representation
+>
+> ```csharp
+> Q.InterpolatedString(type, args)
+> ```
+>
+> where `type` is an expression of type `Type` representing any of `string`, `System.FormattableString`, or `System.IFormattable`, and `args` is an argument list
+>
+> ```csharp
+> i1, ..., iN
+> ```
+>
+> where `i1` through `iN` correspond to the expression tree translation of the literal string fragments and interpolations occurring in the interpolated string expression in lexical order.
+>
+> If the interpolated string is empty (i.e. any of `$""` or `$@""`), a single interpolation literal is produced for use in `args`:
+>
+> ```csharp
+> Q.InterpolationLiteral("")
+> ```
+>
+> Note that generalized expression trees retain the structure of the interpolated string expression. This enables expression tree libraries to avoid having to parse a .NET format string, for instance when translating an expression tree to a target language that supports interpolation as well.
+
+
 
 ### Simple names
 
@@ -1112,6 +1367,16 @@ parenthesized_expression
 ```
 
 A *parenthesized_expression* is evaluated by evaluating the *expression* within the parentheses. If the *expression* within the parentheses denotes a namespace or type, a compile-time error occurs. Otherwise, the result of the *parenthesized_expression* is the result of the evaluation of the contained *expression*.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> A *parenthesized_expression* expression
+>
+> ```csharp
+> ( expression )
+> ```
+>
+> when subject to conversion to an expression tree, is translated by applying the expression tree translation steps to `expression`.
 
 ### Member access
 
@@ -1282,6 +1547,79 @@ Once a method has been selected and validated at binding-time by the above steps
 
 The intuitive effect of the resolution rules described above is as follows: To locate the particular method invoked by a method invocation, start with the type indicated by the method invocation and proceed up the inheritance chain until at least one applicable, accessible, non-override method declaration is found. Then perform type inference and overload resolution on the set of applicable, accessible, non-override methods declared in that type and invoke the method thus selected. If no method was found, try instead to process the invocation as an extension method invocation.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> Method invocation expressions
+>
+> ```csharp
+> T.M(args)
+> instance.M(args)
+> ```
+>
+> are translated to an expression tree by first translating `instance` to an expression tree `instanceExpr`, if `M` is bound to an instance method, and by translating the argument list `args` to `argsExpr`, if it exists. Note than translation of argument lists may insert cast expressions for required implicit conversions, and/or array initialization expressions for assignment to `params` parameters, classifying these expressions as compiler-generated (see [Argument lists](expressions.md#argument-lists)). Translation to an expression tree then proceeds as follows.
+>
+> For purposes of conversion to a query expression tree, if the method invocation is dynamically bound, translation fails and an error is reported. Otherwise, it is translated into
+>
+> ```csharp
+> Expression.Call(instanceExpr, method, argsExpr)
+> ```
+>
+> if an argument list `args` exists, or
+>
+> ```csharp
+> Expression.Call(instanceExpr, method, empty)
+> ```
+>
+> where `instanceExpr` is `default(Expression)` if `M` is bound to a static method, `method` is an expression of type `MethodInfo` representing the bound method `M`, and `empty` is an expression of type `Expression[]` with zero elements.
+>
+> Note that the conversion of the argument list `args` to `argsExpr` for query expression trees yields an expression of type `Expression[]`, see [Argument lists](expressions.md#argument-lists). Therefore, overload resolution rules applied to bind the `Call` factory method invocation will always pick the `Call(Expression, MethodInfo, Expression[])` overload, even if specialized overloads for low argument counts are available.
+>
+> Also note that the conversion for a method invocation expression without any arguments uses an expression representing an empty array `empty` rather than `new Expression[0]`. This provides the implementation the flexibility to use a shared instance of an empty array (e.g. `Array.Empty<Expression>()`).
+>
+> For purposes of conversion to a generalized expression tree, it is translated into
+>
+> ```csharp
+> Q.Call(info, argsExpr)
+> ```
+>
+> or, if no argument list is present,
+>
+> ```csharp
+> Q.Call(info)
+> ```
+>
+> if `M` is bound to a static method, and into
+>
+> ```csharp
+> Q.Call(info, instanceExpr, argsExpr)
+> ```
+>
+> or, if no argument list is present,
+>
+> ```csharp
+> Q.Call(info, instanceExpr)
+> ```
+>
+> otherwise, where `info` is
+>
+> ```csharp
+> Q.CallInfo(binder)
+> ```
+>
+> if the method invocation is dynamically bound, where `binder` is an expression of type `Microsoft.CSharp.RuntimeBinder.CallSiteBinder` representing the dynamic operation, or
+>
+> ```csharp
+> Q.CallInfo(default(Q.Flags), method)
+> ```
+>
+> otherwise, where the first flags argument is reserved for future use, and `method` is an expression of type `MethodInfo` representing the bound method `M`.
+>
+> ***TODO***
+> * Consider whether `argsExpr` should be a syntactic fragment of shape `(, argExpr)*` that gets concatenated to the argument list containing `info` and `fExpr`, thus flattening the first-class representation of an argument list and "inlining" it on the `Call` factory (much like query expression trees does).
+> * Evaluate options for the dynamic case:
+>   * create a specification for the construction of `binder` (can also be used to specify `dynamic` behavior outside the context of expression trees) and consider making more properties on the `Microsoft.CSharp.RuntimeBinder` library types publicly accessable so expression tree libraries can inspect this info, or,
+>   * steer away from reusing `Microsoft.CSharp` and introduce a `CallInfo` factory overload for dynamic binding (e.g. a `(Q.DynamicFlags flags, Type context, string name, Type[] typeArgs, params A[] argumentInfo)` overload, where `A` is built through factory invocations as well).
+
 #### Extension method invocations
 
 In a method invocation ([Invocations on boxed instances](expressions.md#invocations-on-boxed-instances)) of one of the forms
@@ -1409,6 +1747,38 @@ C.H(3)
 ```
 `D.G` takes precedence over `C.G`, and `E.F` takes precedence over both `D.F` and `C.F`.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> An extension method invocation expression
+>
+> ```csharp
+> instance.M(args)
+> ```
+>
+> is translated to a query expression tree by first rewriting the expression to a static method invocation expression using the rules described above, and translating the result of this rewrite.
+>
+> For purposes of conversion to a generalized expression tree, it is translated into
+>
+> ```csharp
+> Q.Call(info, instanceExpr, argsExpr)
+> ```
+>
+> or, if no argument list is present,
+>
+> ```csharp
+> Q.Call(info, instanceExpr)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.CallInfo(Q.Flags.InvokeExtensionMethod, method)
+> ```
+>
+> where `method` is an expression of type `MethodInfo` representing the bound method `M`.
+>
+> Note that the use of `Q.Flags.InvokeExtensionMethod` enables expression tree libraries to distinguish between invoking an extension method using instance method invocation syntax and invoking it using static method invocation syntax. Expression tree libraries can trivially rewrite extension method invocation expressions into static method invocation expression by inspecting this flag, for instance for purposes of evaluating the expression.
+
 #### Delegate invocations
 
 For a delegate invocation, the *primary_expression* of the *invocation_expression* must be a value of a *delegate_type*. Furthermore, considering the *delegate_type* to be a function member with the same parameter list as the *delegate_type*, the *delegate_type* must be applicable ([Applicable function member](expressions.md#applicable-function-member)) with respect to the *argument_list* of the *invocation_expression*.
@@ -1418,6 +1788,66 @@ The run-time processing of a delegate invocation of the form `D(A)`, where `D` i
 *  `D` is evaluated. If this evaluation causes an exception, no further steps are executed.
 *  The value of `D` is checked to be valid. If the value of `D` is `null`, a `System.NullReferenceException` is thrown and no further steps are executed.
 *  Otherwise, `D` is a reference to a delegate instance. Function member invocations ([Compile-time checking of dynamic overload resolution](expressions.md#compile-time-checking-of-dynamic-overload-resolution)) are performed on each of the callable entities in the invocation list of the delegate. For callable entities consisting of an instance and instance method, the instance for the invocation is the instance contained in the callable entity.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> A delegate invocation expression
+>
+> ```csharp
+> f(args)
+> ```
+>
+> is translated to an expression tree by first translating `f` to an expression tree `fExpr` and by translating the argument list `args` to `argsExpr`, if it exists. Note than translation of argument lists may insert cast expressions for required implicit conversions, and/or array initialization expressions for assignment to `params` parameters, classifying these expressions as compiler-generated (see [Argument lists](expressions.md#argument-lists)) Translation to an expression tree then proceeds as follows.
+>
+> For purposes of conversion to a query expression tree, if the delegate invocation is dynamically bound, translation fails and an error is reported. Otherwise, it is translated into
+>
+> ```csharp
+> Expression.Invoke(fExpr, argsExpr)
+> ```
+>
+> if an argument list `args` exists, or
+>
+> ```csharp
+> Expression.Invoke(fExpr, empty)
+> ```
+>
+> where `empty` is an expression of type `Expression[]` with zero elements otherwise.
+>
+> Note that the conversion of the argument list `args` to `argsExpr` for query expression trees yields an expression of type `Expression[]`, see [Argument lists](expressions.md#argument-lists). Therefore, overload resolution rules applied to bind the `Invoke` factory method invocation will always pick the `Invoke(Expression, Expression[])` overload, even if specialized overloads for low argument counts are available.
+>
+> Also note that the conversion for a delegate invocation expression without any arguments uses an expression representing an empty array `empty` rather than `new Expression[0]`. This provides the implementation the flexibility to use a shared instance of an empty array (e.g. `Array.Empty<Expression>()`).
+>
+> For purposes of conversion to a generalized expression tree, it is translated into
+>
+> ```csharp
+> Q.Invoke(info, fExpr, argsExpr)
+> ```
+>
+> or, if no argument list is present,
+>
+> ```csharp
+> Q.Invoke(info, fExpr)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.InvokeInfo(binder)
+> ```
+>
+> if the delegate invocation is dynamically bound, where `binder` is an expression of type `Microsoft.CSharp.RuntimeBinder.CallSiteBinder` representing the dynamic operation, or
+>
+> ```csharp
+> Q.InvokeInfo(default(Q.Flags))
+> ```
+>
+> otherwise, where the first flags argument is reserved for future use.
+>
+> ***TODO***
+> * Consider whether `argsExpr` should be a syntactic fragment of shape `(, argExpr)*` that gets concatenated to the argument list containing `info` and `fExpr`, thus flattening the first-class representation of an argument list and "inlining" it on the `Invoke` factory (much like query expression trees does).
+> * Evaluate options for the dynamic case:
+>   * create a specification for the construction of `binder` (can also be used to specify `dynamic` behavior outside the context of expression trees) and consider making more properties on the `Microsoft.CSharp.RuntimeBinder` library types publicly accessable so expression tree libraries can inspect this info, or,
+>   * steer away from reusing `Microsoft.CSharp` and introduce a `InvokeInfo` factory overload for dynamic binding (e.g. a `(Q.DynamicFlags flags, Type context, params A[] argumentInfo)` overload, where `A` is built through factory invocations as well).
 
 ### Element access
 
@@ -1454,6 +1884,54 @@ The run-time processing of an array access of the form `P[A]`, where `P` is a *p
 *  The value of each expression in the *argument_list* is checked against the actual bounds of each dimension of the array instance referenced by `P`. If one or more values are out of range, a `System.IndexOutOfRangeException` is thrown and no further steps are executed.
 *  The location of the array element given by the index expression(s) is computed, and this location becomes the result of the array access.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> An array access expression
+>
+> ```csharp
+> array[args]
+> ```
+>
+> is translated to an expression tree by first pre-processing the expression by rewriting each `argExpr` in the `args` argument list to
+>
+> ```csharp
+> checked((T)(argExpr))
+> ```
+>
+> where `T` is `int` if the expression is translated to a query expression tree and `argExpr` is not of type `int`, or where `T` is any of the types `int`, `uint`, `long`, or `ulong` if the expression is translated to a generalized expression tree and an implicit conversion is needed ([Implicit conversions](conversions.md#implicit-conversions)). If no conversions are required, `argExpr` remains unchanged. Note this step may introduce a cast expression which will be classified as compiler-generated. This rewritten index expression will subsequently be referred to as `indexExpr`, and the resulting argument list will be referred to as `indices`. Finally, convert the argument list `indices` to an expression tree `indicesExpr`. Translation to an expression tree then proceeds as follows.
+>
+> For purposes of conversion to a query expression tree, it is translated into
+>
+> ```csharp
+> Expression.ArrayIndex(arrayExpr, indicesExpr)
+> ```
+>
+> if the argument list `indices` has more than one argument, or
+>
+> ```csharp
+> Expression.ArrayIndex(arrayExpr, indexExpr)
+> ```
+>
+> where `indexExpr` is the result of translating the single index expression to an expression tree.
+>
+> Note that the conversion of the argument list `indices` to `indicesExpr` for query expression trees yields an expression of type `Expression[]`, see [Argument lists](expressions.md#argument-lists). Therefore, binding to the `ArrayIndex` factory method for indexers with more than one index expression will always pick the `ArrayIndex(Expression, Expression[])` overload, even if specialized overloads for low argument counts are available. For historical reasons, query expression tree factory methods have distinguished between one indexer versus more than one.
+>
+> It is also worth pointing out that the `ArrayIndex(Expression, Expression[])` overload returns an expression of type `MethodCallExpression` where the target method is the `Get` method on the multi-dimensional array type. This design is historical and also prevents the use of this node for purposes of assignment.
+>
+> For purposes of conversion to a generalized expression tree, it is translated into
+>
+> ```csharp
+> Q.ArrayIndex(info, arrayExpr, indicesExpr)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.ArrayIndexInfo(default(Q.Flags))
+> ```
+>
+> where the first flags argument is reserved for future use.
+
 #### Indexer access
 
 For an indexer access, the *primary_no_array_creation_expression* of the *element_access* must be a variable or value of a class, struct, or interface type, and this type must implement one or more indexers that are applicable with respect to the *argument_list* of the *element_access*.
@@ -1470,6 +1948,64 @@ The binding-time processing of an indexer access of the form `P[A]`, where `P` i
 *  The index expressions of the *argument_list* are evaluated in order, from left to right. The result of processing the indexer access is an expression classified as an indexer access. The indexer access expression references the indexer determined in the step above, and has an associated instance expression of `P` and an associated argument list of `A`.
 
 Depending on the context in which it is used, an indexer access causes invocation of either the *get accessor* or the *set accessor* of the indexer. If the indexer access is the target of an assignment, the *set accessor* is invoked to assign a new value ([Simple assignment](expressions.md#simple-assignment)). In all other cases, the *get accessor* is invoked to obtain the current value ([Values of expressions](expressions.md#values-of-expressions)).
+
+> __Expression Tree Conversion Translation Steps__
+>
+> A indexer access expression
+>
+> ```csharp
+> obj[args]
+> ```
+>
+> is translated to an expression tree by first translating `obj` to an expression tree `objExpr` and by translating the argument list `args` to `argsExpr`. Note than translation of argument lists may insert cast expressions for required implicit conversions, and/or array initialization expressions for assignment to `params` parameters, classifying these expressions as compiler-generated (see [Argument lists](expressions.md#argument-lists)). Translation to an expression tree then proceeds as follows.
+>
+> For purposes of conversion to a query expression tree, if the indexer access expression is dynamically bound, translation fails and an error is reported. Otherwise, it is translated into
+>
+> ```csharp
+> Expression.Call(objExpr, accessorMethod, argsExpr)
+> ```
+>
+> where `accessorMethod` is an expression of type `MethodInfo` representing the `get` accessor method of the bound indexer. The `get` accessor can either be declared on the type of `objExpr`, or can be inherited from a base class. To locate the bound `get` accessor method, the class hierarchy is walked starting from the type of `objExpr`.
+>
+> Note that for purposes of compatibility, translation of query expression trees does not bind to `Expression.MakeIndex` factory methods, which return an `IndexExpression` that supports assignment.
+>
+> For purposes of conversion to a generalized expression tree, it is translated into
+>
+> ```csharp
+> Q.Index(info, objExpr, argsExpr)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.IndexInfo(binder)
+> ```
+>
+> or
+>
+> ```csharp
+> Q.IndexInfo(getBinder, setBinder)
+> ```
+>
+> if the indexer access is dynamically bound, where `binder`, `getBinder`, and `setBinder` are expressions of type `Microsoft.CSharp.RuntimeBinder.CallSiteBinder` representing the dynamic operation(s) involved depending on the use site of the indexer access expression (in particular, two binders are needed for compound assignment), or
+>
+> ```csharp
+> Q.IndexInfo(default(Q.Flags), accessorMethod)
+> ```
+>
+> where the first flags argument is reserved for future use, and where `accessorMethod` is an expression of type `MethodInfo` representing the `get` or `set` accessor method of the bound indexer.
+>
+> If both a `get` and `set` accessor are available, it is left to the implementation which accessor method is passed to `IndexInfo`. This situation can arise for compound assignment expressions where the indexer is used both to read and to assign. Expression tree libraries should use the `MethodInfo` to locate the `PropertyInfo` of the corresponding accessor.
+>
+>> The limitation of passing a `MethodInfo` rather than a `PropertyInfo` object is due to restrictions in code-generation. In particular, it is easy to obtain a `MethodInfo` object through a `ldtoken` instruction and a call to `MethodBase.GetMethodFromHandle`. However, it is non-trivial to locate the corresponding `PropertyInfo` without performing complex code generation against `System.Reflection` APIs.
+>
+> Note that generalized expression trees may refer to an indexer using the `set` accessor. This supports `set`-only indexers used in assignment expressions.
+>
+> ***TODO***:
+> * Evaluate options for the dynamic case:
+>   * create a specification for the construction of `binder` (can also be used to specify `dynamic` behavior outside the context of expression trees) and consider making more properties on the `Microsoft.CSharp.RuntimeBinder` library types publicly accessable so expression tree libraries can inspect this info, or,
+>   * steer away from reusing `Microsoft.CSharp` and introduce a `IndexInfo` factory overload for dynamic binding (e.g. a `(Q.DynamicFlags flags, Type context, params A[] argumentInfo)` overload, where `A` is built through factory invocations as well), and,
+>   * define how to deal with compound assignment which requires a `GetIndex` and `SetIndex` binder; do we need both?
 
 ### This access
 
@@ -1492,6 +2028,32 @@ A *this_access* is permitted only in the *block* of an instance constructor, an 
 
 Use of `this` in a *primary_expression* in a context other than the ones listed above is a compile-time error. In particular, it is not possible to refer to `this` in a static method, a static property accessor, or in a *variable_initializer* of a field declaration.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> A *this_access* expression
+>
+> ```csharp
+> this
+> ```
+>
+> is translated to a query expression tree as
+>
+> ```csharp
+> Expression.Constant(this, type)
+> ```
+>
+> and is translated to a generalized expression tree as
+>
+> ```csharp
+> Q.Constant(flags, literal, type)
+> ```
+>
+> where `flags` is an expression of type `Q.Flags` with value `Q.Flags.This` optionally bitwise `|` combined with `Q.CompilerGenerated` if the node was compiler-generated (for instance when `this` was not user-specified in an instance method invocation),
+>
+> and where `type` is an expression of type `Type` representing the instance type ([The instance type](classes.md#the-instance-type)) of the class within which the usage occurs.
+>
+> Note that generalized expression trees retain information about use of `this` using a flag passed to the `Constant` factory method.
+
 ### Base access
 
 A *base_access* consists of the reserved word `base` followed by either a "`.`" token and an identifier or an *argument_list* enclosed in square brackets:
@@ -1508,6 +2070,10 @@ A *base_access* is used to access base class members that are hidden by similarl
 At binding-time, *base_access* expressions of the form `base.I` and `base[E]` are evaluated exactly as if they were written `((B)this).I` and `((B)this)[E]`, where `B` is the base class of the class or struct in which the construct occurs. Thus, `base.I` and `base[E]` correspond to `this.I` and `this[E]`, except `this` is viewed as an instance of the base class.
 
 When a *base_access* references a virtual function member (a method, property, or indexer), the determination of which function member to invoke at run-time ([Compile-time checking of dynamic overload resolution](expressions.md#compile-time-checking-of-dynamic-overload-resolution)) is changed. The function member that is invoked is determined by finding the most derived implementation ([Virtual methods](classes.md#virtual-methods)) of the function member with respect to `B` (instead of with respect to the run-time type of `this`, as would be usual in a non-base access). Thus, within an `override` of a `virtual` function member, a *base_access* can be used to invoke the inherited implementation of the function member. If the function member referenced by a *base_access* is abstract, a binding-time error occurs.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> A *base_access* expression is not supported in expression trees.
 
 ### Postfix increment and decrement operators
 
@@ -1547,6 +2113,59 @@ The run-time processing of a postfix increment or decrement operation of the for
 The `++` and `--` operators also support prefix notation ([Prefix increment and decrement operators](expressions.md#prefix-increment-and-decrement-operators)). Typically, the result of `x++` or `x--` is the value of `x` before the operation, whereas the result of `++x` or `--x` is the value of `x` after the operation. In either case, `x` itself has the same value after the operation.
 
 An `operator ++` or `operator --` implementation can be invoked using either postfix or prefix notation. It is not possible to have separate operator implementations for the two notations.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> A `++` and `--` postfix increment and decrement expressions
+>
+> ```csharp
+> expression++
+> expression--
+> ```
+>
+> are translated into an expression tree by first translating `expression` to `expr`, and by optionally constructing an expression `method` of type `MethodInfo` representing the user-defined `operator ++` or `operator --` implementation, if the operator is bound to a user-defined operator. Expression tree translation then proceeds as follows.
+>
+> When subject to conversion to a query expression tree, an error is reported.
+>
+> When subject to conversion to a generalized expression tree, it is translated into either of
+>
+> ```csharp
+> Q.PostIncrement(info, expr)
+> Q.PostDecrement(info, expr)
+> ```
+>
+> where `info` is either of
+>
+> ```csharp
+> Q.PostIncrementInfo(binder)
+> Q.PostDecrementInfo(binder)
+> ```
+>
+> if `expression` is of type `dynamic`, where `binder` is an expression of type `Microsoft.CSharp.RuntimeBinder.CallSiteBinder` representing the dynamic operation, or
+>
+> ```csharp
+> Q.PostIncrementInfo(flags, method)
+> Q.PostDecrementInfo(flags, method)
+> ```
+>
+> if the operator is bound to a user-defined implementation of the `operator ++` or `operator --`, or
+>
+> ```csharp
+> Q.PostIncrementInfo(flags)
+> Q.PostDecrementInfo(flags)
+> ```
+>
+> otherwise, where `flags` is either:
+>
+> * `Q.Flags.CheckedContext` if the prefix increment or decrement expression occurs in a checked context, or,
+> * `default(Q.Flags)` otherwise.
+>
+> Note that the behavior of a user-defined increment or decrement operator is typically not affected by the use in a checked context. For purposes of generalized expression trees, this information is retained for all operators, and passed as a flag. The bound expression tree library is free to ignore this information.
+>
+> ***TODO***:
+> * Evaluate options for the dynamic case:
+>   * create a specification for the construction of `binder` (can also be used to specify `dynamic` behavior outside the context of expression trees) and consider making more properties on the `Microsoft.CSharp.RuntimeBinder` library types publicly accessable so expression tree libraries can inspect this info, or,
+>   * steer away from reusing `Microsoft.CSharp` and introduce `Post*Info` factory overloads for dynamic binding (e.g. a `(Q.DynamicFlags flags, Type context, A argumentInfo)` overload, where `A` is built through factory invocations as well).
 
 ### The new operator
 
@@ -1610,6 +2229,142 @@ The run-time processing of an *object_creation_expression* of the form `new T(A)
 *   If `T` is a *struct_type*:
     * An instance of type `T` is created by allocating a temporary local variable. Since an instance constructor of a *struct_type* is required to definitely assign a value to each field of the instance being created, no initialization of the temporary variable is necessary.
     * The instance constructor is invoked according to the rules of function member invocation ([Compile-time checking of dynamic overload resolution](expressions.md#compile-time-checking-of-dynamic-overload-resolution)). A reference to the newly allocated instance is automatically passed to the instance constructor and the instance can be accessed from within that constructor as `this`.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> A `new` object creation expression
+>
+> ```csharp
+> new T(args)
+> ```
+>
+> with no *object_initializer* (see [Object initializer](expressions.md#object-initializer)) and no *collection_initializer* (see [Collection initializer](expressions.md#collection-initializer)) is translated into an expression tree by first translating the argument list `args` to `argsExpr`. Note than translation of argument lists may insert cast expressions for required implicit conversions, and/or array initialization expressions for assignment to `params` parameters, classifying these expressions as compiler-generated (see [Argument lists](expressions.md#argument-lists)). Expression tree translation then proceeds as follows.
+>
+> When subject to conversion to a query expression tree, if the object creation operation is dynamically bound, translation fails and an error is reported. Otherwise, it is translated into
+>
+> ```csharp
+> Expression.New(type)
+> ```
+>
+> where `type` is an expression of type `Type` if no argument list is specified. Note that this rule applies regardless of whether `T` is a struct, a class, or a generic parameter type with a `new()` constraint. The `Expression.New` factory does infer a `ConstructorInfo` object if `T` is not a struct.
+>
+> Otherwise, if an argument list is specified, it is translated into
+>
+> ```csharp
+> Expression.New(constructor, argsExpr)
+> ```
+>
+> where `constructor` is an object of type `ConstructorInfo` representing the constructor bound by for the object creation expression.
+>
+> Note that the conversion of the argument list `args` to `argsExpr` for query expression trees yields an expression of type `Expression[]`, see [Argument lists](expressions.md#argument-lists). Therefore, overload resolution rules applied to bind the `New` factory method invocation will always pick the `New(ConstructorInfo, Expression[])` overload, even if specialized overloads for low argument counts are available.
+>
+> When subject to conversion to a generalized expression tree, it is translated into
+>
+> ```csharp
+> Q.New(info, argsExpr)
+> ```
+>
+> or, if no argument list is present,
+>
+> ```csharp
+> Q.New(info)
+> ```
+>
+> where `info` is either of
+>
+> ```csharp
+> Q.NewInfo(type, binder)
+> ```
+>
+> if the object creation expression is dynamically bound, where `binder` is an expression of type `Microsoft.CSharp.RuntimeBinder.CallSiteBinder` representing the dynamic operation, and where `type` is an expression of type `Type` representing the type `T`, or
+>
+> ```csharp
+> Q.NewInfo(default(Q.Flags), type)
+> ```
+>
+> where `type` is an expression of type `Type`, if `T` is a struct type and no argument list is present, or if `T` is a generic parameter type with a `new()` constraint, or
+>
+> ```csharp
+> Q.NewInfo(default(Q.Flags), constructor)
+> ```
+>
+> otherwise, where the first flags argument is reserved for future use, and `constructor` is an object of type `ConstructorInfo` representing the constructor bound by for the object creation expression.
+>
+> Note that generalized expression trees prefer binding to a `NewInfo` factory with a `ConstructorInfo` if one is available, even if the object creation expression has no argument list specified. This reduces the need for expression tree libraries to use reflection to find the parameterless constructor.
+>
+> ***TODO***:
+> * Evaluate options for the dynamic case:
+>   * create a specification for the construction of `binder` (can also be used to specify `dynamic` behavior outside the context of expression trees) and consider making more properties on the `Microsoft.CSharp.RuntimeBinder` library types publicly accessable so expression tree libraries can inspect this info, or,
+>   * steer away from reusing `Microsoft.CSharp` and introduce a `NewInfo` factory overload for dynamic binding (e.g. a `(Q.DynamicFlags flags, Type context, params A[] argumentInfo)` overload, where `A` is built through factory invocations as well).
+>
+>
+> An object creation expression with an *object_initializer*
+>
+> ```csharp
+> newObj { member_init_1, ..., member_init_N }
+> ```
+>
+> where `newObj` is either `new T` or `new T(args)` is translated to an expression tree by first rewriting `new T` to `new T()` and translating the resulting expression as an object creation expression to an expression tree `newExpr`. Next, each *member_initializer* `member_init_i` (for `1 <= i <= N`) is translated to an expression tree `initExpr_i` (see [Object initializers](expressions.md#object-initializers)). Expression tree conversion then proceeds as follows.
+>
+> When converted to a query expression tree, it is translated into
+>
+> ```csharp
+> newExpr
+> ```
+>
+> if the member initializer list is empty (that is, `N` is `0`), or
+>
+> ```csharp
+> Expression.MemberInit(newExpr, memberBindings)
+> ```
+>
+> where `memberBindings` is an expression of type `System.Linq.Expressions.MemberBinding[]` representing an array of length `N` with elements `initExpr_1` to `initExpr_N` otherwise.
+>
+> When converted to a generalized expression tree, it is translated into
+>
+> ```csharp
+> Q.NewObjectInit(default(Q.Flags), newExpr, memberBindings)
+> ```
+>
+> where the first flags argument is reserved for future use, and where `memberBindings` is
+>
+> ```csharp
+> Q.MemberBindings(initExpr_1, ..., initExpr_N)
+> ```
+>
+> Note that generalized expression trees do not take away empty object initializer lists. Also note that member bindings are represented using a first-class expression node, allowing reuse for ***nested object initializers*** (see [Object initializers](expressions.md#object-initializers)). 
+>
+>
+>
+> An object creation expression with a *collection_initializer*
+>
+> ```csharp
+> newObj { element_init_1, ..., element_init_N }
+> ```
+>
+> where `newObj` is either `new T` or `new T(args)` is translated to an expression tree by first rewriting `new T` to `new T()` and translating the resulting expression as an object creation expression to an expression tree `newExpr`. Next, each *element_initializer* `element_init_i` (for `1 <= i <= N`) is translated to an expression tree `initExpr_i` (see [Collection initializers](expressions.md#collection-initializers)). Expression tree conversion then proceeds as follows.
+>
+> When converted to a query expression tree, it is translated into
+>
+> ```csharp
+> Expression.ListInit(newExpr, elementInitializers)
+> ```
+>
+> where `elementInitializers` is an expression of type `System.Linq.Expressions.ElementInit[]` representing an array of length `N` with elements `initExpr_1` to `initExpr_N` otherwise.
+>
+> When converted to a generalized expression tree, it is translated into
+>
+> ```csharp
+> Q.NewCollectionInit(default(Q.Flags), newExpr, elementInitializers)
+> ```
+>
+> where the first flags argument is reserved for future use, and where `elementInitializers` is
+>
+> ```csharp
+> Q.ElementInitializers(initExpr_1, ..., initExpr_N)
+> ```
+>
+> Note that element initializers are represented using a first-class expression node, allowing reuse for ***nested object initializers*** (see [Object initializers](expressions.md#object-initializers)). 
 
 #### Object initializers
 
@@ -1764,6 +2519,117 @@ var c = __c;
 ```
 where `__c`, etc., are generated variables that are invisible and inaccessible to the source code. Note that the arguments for `[0,0]` are evaluated only once, and the arguments for `[1,2]` are evaluated once even though they are never used.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> Translation of a *member_initializer*
+>
+> ```antlr
+> member_initializer
+>     : initializer_target '=' initializer_value
+>     ;
+>
+> initializer_target
+>     : identifier
+>     | '[' argument_list ']'
+>     ;
+>
+> initializer_value
+>     : expression
+>     | object_or_collection_initializer
+>     ;
+> ```
+>
+> to an expression tree proceeds as follows.
+>
+> First, create an expression `member` of type `MemberInfo` representing the bound *initializer_target*:
+>
+> * for an *identifier*, either a `FieldInfo` if *identifier* binds to a field, or a `MethodInfo` for the `set` accessor of the property bound by *identifier*,
+> * for an indexer assignment, the `MethodInfo` for the `set` accessor of the indexer bound by the initializer target. Expression tree translation then proceeds as follows.
+>
+> If *initializer_value* is an expression, create an expression `expr` by
+>
+> * translating `(T)(expression)` to an expression tree, if assignment ([Simple assignment](expressions.md#simple-assignment)) to the target requires an implicit conversion to type `T` which will be classified as compiler-generated, or
+> * translating `expression` to an expression tree, otherwise.
+>
+> When converting to a query expression tree, if an indexer assignment is used, a compile-time error occurs. Otherwise, it is translated to:
+>
+> ```csharp
+> Expression.Bind(member, expr)
+> ```
+>
+> if *initializer_value* is an expression, or
+>
+> ```csharp
+> Expression.MemberBind(member, bindings)
+> ```
+>
+> if *initializer_value* is an object initializer, where `bindings` is an expression of type `System.Linq.Expressions.MemberBinding[]` with elements containing the result of translating each nested *member_initializer* to an expression tree, or
+>
+> ```csharp
+> Expression.ListBind(member, initializers)
+> ```
+>
+> if *initializer_value* is a collection initializer, where `initializers` is an expression of type `System.Linq.Expressions.ElementInit[]` with elements containing the result of translating each nested *element_initializer* to an expression tree.
+>
+> When converted to a generalized expression tree, first define an expression `target` as
+>
+> ```csharp
+> Q.NewObjectInitTarget(info)
+> ```
+>
+> if *initializer_target* is an *identifier*, or
+>
+> ```csharp
+> Q.NewObjectInitTarget(info, args)
+> ```
+>
+> if *initializer_target* is bound to an indexer, where `args` is the result of translating the *argument_list* to an expression tree, and where `info` is
+>
+> ```csharp
+> Q.NewObjectInitTarget(default(Q.Flags), member)
+> ```
+>
+> where the first flags argument is reserved for future use (for instance, when `member` may represent a generalized extension member).
+>
+> The member initializer is then translated into:
+>
+> ```csharp
+> Q.NewObjectMemberInit(default(Q.Flags), target, expr)
+> ```
+>
+> if *initializer_value* is an expression, where `expr` is the result of translating the expression to an expression tree, or
+>
+> ```csharp
+> Q.NewObjectMemberInit(default(Q.Flags), target, bindings)
+> ```
+>
+> if *initializer_value* is an object initializer, where `bindings` is
+>
+> ```csharp
+> Q.MemberBindings(initExpr_1, ..., initExpr_N)
+> ```
+>
+> where `initExpr_i` is the result of translating the `i`th nested *member_initializer* to an expression tree, or
+>
+> ```csharp
+> Q.NewObjectMemberInit(default(Q.Flags), target, initializers)
+> ```
+>
+> if *initializer_value* is an collection initializer, where `initializers` is
+>
+> ```csharp
+> Q.ElementInitializers(initExpr_1, ..., initExpr_N)
+> ```
+>
+> where `initExpr_i` is the result of translating the `i`th nested *element_initializer* to an expression tree.
+>
+> ***TODO***:
+> * Review the factory method names. The introduction of indexer initializers has led to the requirement to add a construct modeling the assignment target, separate from the "binding". The most natural name for a binding is to have `MemberInit` in it, conform the C# specification nomenclature. As such, the original `MemberInit` becomes confusing and has been substituted for `NewObjectInit`.
+> * If we decide that generalized expression trees can benefit from improved naming (e.g. `ListInit` incorrectly implies a list rather than any collection type), we may as well want to:
+>   * make all names derived from the C# grammar, and,
+>   * reduce flattening or inlining of language constructs when specifying the factory method invocations (i.e. making more grammar productions first-class nodes).
+> * Review the use of `info` nodes across the board.
+
 #### Collection initializers
 
 A collection initializer specifies the elements of a collection.
@@ -1838,6 +2704,89 @@ __clist.Add(__c2);
 var contacts = __clist;
 ```
 where `__clist`, `__c1` and `__c2` are temporary variables that are otherwise invisible and inaccessible.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> Translation of a *collection_initializer*
+>
+> ```antlr
+> collection_initializer
+>     : '{' element_initializer_list '}'
+>     | '{' element_initializer_list ',' '}'
+>     ;
+>
+> element_initializer_list
+>     : element_initializer (',' element_initializer)*
+>     ;
+>
+> element_initializer
+>     : non_assignment_expression
+>     | '{' expression_list '}'
+>     ;
+>
+> expression_list
+>     : expression (',' expression)*
+>     ;
+> ```
+>
+> to an expression tree proceeds as follows.
+>
+> First, create an expression `method` of type `MethodInfo` representing the bound `Add` method associated with the *collection_initializer*. Note this method may be an extension method.
+>
+> Next, if the *element_initializer* is a *non_assignment_expression*, convert this expression to an expression tree `expr`. Otherwise, if *element_initializer* contains an *expression_list*, convert the expressions in this list to expression trees `expr_1` to `expr_N`, in lexical order, by
+>
+> * translating `(T)(expression)` to an expression tree, if assignment to the corresponding parameter on `Add` requires an implicit conversion to type `T` which will be classified as compiler-generated, or
+> * translating `expression` to an expression tree, otherwise.
+>
+> When converting to a query expression tree, if `method` refers to a static method, a compile-time error occurs. Otherwise, it is translated to:
+>
+> ```csharp
+> Expression.ElementInit(method, args)
+> ```
+>
+> where `args` is
+>
+> ```csharp
+> new Expression[] { expr }
+> ```
+>
+> if the *element_initializer* is a *non_assignment_expression*, or
+>
+> ```csharp
+> new Expression[] { expr_1, ..., expr_N }
+> ```
+>
+> otherwise.
+>
+> When converting a generalized expression tree, it is translated to:
+>
+> ```csharp
+> Q.ElementInit(info, args)
+> ```
+>
+> where `args` is
+>
+> ```csharp
+> expr
+> ```
+>
+> if the *element_initializer* is a *non_assignment_expression*, or
+>
+> ```csharp
+> expr_1, ..., expr_N
+> ```
+>
+> otherwise, and where `info` is
+>
+> ```csharp
+> Q.ElementInitInfo(flags, method)
+> ```
+>
+> where `flags` is `Q.Flags.InvokeExtensionMethod` is the specified method is invoked as an extension method, or `default(Q.Flags)` otherwise.
+>
+> Note that generalized expression trees use an argument list containing the expression trees representing the expressions used in the element initializer, thus resulting in overload resolution on `ElementInit`. This enables expression trees libraries to introduce optimized overloads for common cases, for instance an initializer consisting of a single expression.
+>
+> Also note that generalized expression trees support extension methods for 
 
 #### Array creation expressions
 
@@ -1925,6 +2874,95 @@ var contacts = new[] {
 };
 ```
 
+> __Expression Tree Conversion Translation Steps__
+>
+> Translation of an *array_creation_expression* is performed by first pre-processing the expression as follows.
+>
+> If *array_creation_expression* is an ***implicitly typed array creation expression*** of the form
+>
+> ```antlr
+> 'new' rank_specifier array_initializer
+> ```
+>
+> it is first translated to
+>
+> ```antlr
+> 'new' array_type array_initializer
+> ```
+>
+> where `array_type` is the array type inferred as described above. The result of this translation is a new *array_creation_expression* which subsumes the original one from this point on.
+>
+> Note that the preceding step may introduce an `array_type` for which no valid syntax is available, because it involves anonymous types. For purposes of expression tree conversion, these types only occur transiently as part of the translation steps, and are ultimately converted to expressions of type `Type`. A concrete implementation of this specification will most likely not involve syntactic transformations but operate on an intermediate representation of the code, where bound types are represented symbolically rather than syntactically.
+>
+> If *array_creation_expression* is of the form
+>
+> ```antlr
+> 'new' array_type array_initializer
+> ```
+>
+> it is translated to
+>
+> ```antlr
+> 'new' non_array_type '[' expression_list ']' rank_specifier* array_initializer
+> ```
+>
+> where `non_array_type` is the element type of `array_type`, and `expression_list` is constructed by inferring the individual dimension lengths from the number of elements in each of the corresponding nesting levels of the *array_initializer* and by representing these lenghts as numeric literals that can be converted to `int`, `uint`, `long`, or `ulong`. The result of this translation is a new *array_creation_expression* which subsumes any preceding one from this point on.
+>
+> After the preceding translation steps, all forms of *array_creation_expression* have been transformed to the following form
+>
+> ```antlr
+> 'new' non_array_type '[' expression_list ']' rank_specifier* array_initializer?
+> ```
+>
+> Expression tree translation then proceeds by constructing an expression `elementType` of type `Type` representing the *non_array_type* type, and by constructing expressions `lenExpr_1` to `lenExpr_N` from each dimension length *expression* in *expression_list* by first translating *expression* to
+>
+> * `(T)(expression)`, if the dimension length is implicitly converted to `T` where `T` is `int`, `uint`, `long`, or `ulong`, and classifying the cast expression as compiler-generated, or,
+> * `expression` otherwise,
+>
+> and subsequently converting the resulting expression to an expression tree.
+>
+> Finally, if specified, convert *array_initializer* to an expression `initExpr` using the expression tree conversion steps described in [Array initializers](arrays.md#array-initializers). Expression tree translation then proceeds as follows.
+>
+> When converted to a query expression tree, a compile-time error is reported if the array type is a multi-dimensional array and an array initializer is specified. Otherwise, it is translated to
+>
+> ```csharp
+> Expression.NewArrayInit(elementType, initExpr)
+> ```
+>
+> if an array initializer is specified, or to
+>
+> ```csharp
+> Expression.NewArrayBounds(elementType, bounds)
+> ```
+>
+> otherwise, where `bounds` is an expression of type `Expression[]` representing an array of length `N` containing the expressions `lenExpr_1` to `lenExpr_N`.
+>
+> When converted to a generalized expression tree, it is translated to
+>
+> ```csharp
+> Q.NewArrayInit(info, initExpr)
+> ```
+>
+> if an array initializer is specified, where `info` is
+>
+> ```csharp
+> Q.NewArrayInitInfo(default(Q.Flags), elementType)
+> ```
+>
+> or to
+>
+> ```csharp
+> Q.NewArrayBounds(info, lenExpr_1, ..., lenExpr_N)
+> ```
+>
+> otherwise, where `info` is
+>
+> ```csharp
+> Q.NewArrayBoundsInfo(default(Q.Flags), elementType)
+> ```
+>
+> Note that generalized expression trees specified the dimension length expressions as an argument list, thus resulting in overload resolution of the `NewArrayBounds` method.
+
 #### Delegate creation expressions
 
 A *delegate_creation_expression* is used to create a new instance of a *delegate_type*.
@@ -1977,6 +3015,88 @@ class A
 }
 ```
 the `A.f` field is initialized with a delegate that refers to the second `Square` method because that method exactly matches the formal parameter list and return type of `DoubleFunc`. Had the second `Square` method not been present, a compile-time error would have occurred.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> Translation of an *delegate_creation_expression* of the form
+>
+> ```csharp
+> new D(E)
+> ```
+>
+> starts by constructing an expression `delegateType` of type `Type` representing the type `D`.
+>
+> When converted to a query expression tree, a compile-time error is produced if `E` is of type `dynamic`. Otherwise, it is translated to:
+>
+> ```csharp
+> expr
+> ```
+>
+> where `expr` is the result of translating `E`, if `E` is anonynmous function expression.
+>
+> Otherwise, construct an expression `method` of type `MethodInfo` representing
+>
+> * the method represented by `E` if `E` is a method group, or,
+> * the `Invoke` method on delegate type `D` if `E` is a value of a delegate type, otherwise,
+>
+> and, construct an expression `receiver` to be
+>
+> * if `E` is a method group referring to bound method `M`,
+>   * if `M` is a static method, a `null` expression implicitly typed as `object`, or
+>   * if `E` has an expression `instance` representing the invocation target,
+>     * `instance` if the type of `instance` is a reference type, or
+>     * `(object)(instance)` otherwise, or,
+> * if `E` represents a value of a delegate type, the original expression `E`.
+>
+> Expression tree conversion then proceeds by first checking the existence of the `System.Reflection.MethodInfo.CreateDelegate` instance method. If it exists, the expression tree is represented by translating
+>
+> ```csharp
+> (D)method.CreateDelegate(delegateType, receiver)
+> ```
+>
+> to an expression tree, or by translating
+>
+> ```csharp
+> (D)System.Delegate.CreateDelegate(delegateType, receiver, method)
+> ```
+>
+> to an expression tree otherwise. Note that these translations will result in `Expression.Convert` and `Expression.Call` factory invocations.
+>
+> When converted to a generalized expression tree, it is translated to
+>
+> ```csharp
+> Q.NewDelegate(info)
+> ```
+>
+> if `E` is a method group referring to a static method, or
+>
+> ```csharp
+> Q.NewDelegate(info, expr)
+> ```
+>
+> otherwise, where `expr` is either the result of translating the target instance if `E` is a method group, or the result of translating `E` if `E` is a value or an anonymous function expression, and where `info` is
+>
+> ```csharp
+> Q.NewDelegateInfo(default(Q.Flags), typeof(D), method)
+> ```
+>
+> if `E` is a method group, where `method` is an expression of type `MethodInfo` representing the method `M` bound by the method group in `E`, or
+>
+> ```csharp
+> Q.NewDelegateInfo(default(Q.Flags), typeof(D), binder)
+> ```
+>
+> if `E` has a `dynamic` type, where `binder` is an expression of type `Microsoft.CSharp.RuntimeBinder.CallSiteBinder` representing the dynamic operation used to convert to `D`, or
+>
+> ```csharp
+> Q.NewDelegateInfo(default(Q.Flags), typeof(D))
+> ```
+>
+> otherwise.
+>
+> ***TODO***:
+> * Evaluate if the dynamic case should simply be lowered to `(D)E` (diverging from the user's syntax).
+> * Evaluate if the anonymous method case should omit `NewDelegate` (diverging from the user's syntax).
 
 #### Anonymous object creation expressions
 
@@ -2062,6 +3182,55 @@ identifier = expr.identifier
 ```
 
 Thus, in a projection initializer the *identifier* selects both the value and the field or property to which the value is assigned. Intuitively, a projection initializer projects not just a value, but also the name of the value.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> An anonymous object creation expression
+>
+> ```csharp
+> new { memberDecl_1, ..., memberDecl_N }
+> ```
+>
+> by first constructing the following expressions:
+>
+> * an expression `constructor` of type `ConstructorInfo` representing the constructor on the generated anonymous type used to construct the anonymous object at runtime,
+> * expressions `member_i` (for `1 <= i <= N`) of type `MethodInfo` representing the `get` accessor method of the property on the anonymous type generated for `memberDecl_i`, and,
+> * expressions `expr_i` (for `1 <= i <= N`) obtained by translating the expression occurring in `memberDecl_i`.
+>
+> Translation to an expression tree then proceeds as follows.
+>
+> When converted to a query expression tree, it is translated into
+>
+> ```csharp
+> Expression.New(constructor, (IEnumerable<Expression>)exprs, members)
+> ```
+>
+> where `exprs` is an expression of type `Expression[]` representing an array of length `N` with elements `expr_1` to `expr_N`, and where `members` is an  expression of type `MemberInfo[]` representing an array of length `N` with elements `member_1` to `member_N`.
+>
+> When converted to a generalized expression tree, it is translated into
+>
+> ```csharp
+> Q.NewAnonymous(info, declExpr_1, ..., declExpr_N)
+> ```
+>
+> where `declExpr_i` (for `1 <= i <= N`) is
+>
+> ```csharp
+> Q.MemberDeclaration(member_i, expr_i)
+> ```
+>
+> and `info` is
+>
+> ```csharp
+> Q.NewAnonymousInfo(flags, constructor)
+> ```
+>
+> where `flags` is either:
+>
+> * `Q.Flags.CompilerGenerated` if the anonymous object creation expression was compiler-generated (for instance, for [Transparent identifiers](expressions.md#transparent-identifiers)), or,
+> * `default(Q.Flags)` otherwise.
+>
+> Note that generalized expression trees model anonymous object creation expressions using `MemberDeclaration` nodes that pair up `MethodInfo` and expression node objects for each member declaration. This reduces the need for expression tree libraries to zip an expression node collection with a members collection when analyzing an expression tree.
 
 ### The typeof operator
 
@@ -2150,6 +3319,28 @@ X`1[T]
 Note that `int` and `System.Int32` are the same type.
 
 Also note that the result of `typeof(X<>)` does not depend on the type argument but the result of `typeof(X<T>)` does.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> A `typeof` expression
+>
+> ```csharp
+> typeof(T)
+> ```
+>
+> when subject to conversion to a query expression tree, is translated into
+>
+> ```csharp
+> Expression.Constant(typeof(T), typeof(Type))
+> ```
+>
+> and when subject to conversion to a generalized expression tree, is translated into
+>
+> ```csharp
+> Q.TypeOf(default(Q.Flags), type)
+> ```
+>
+> where `type` is an expression of type `Type` representing the type `T`, and where the first flags parameter is reserved for future use.
 
 ### The checked and unchecked operators
 
@@ -2260,6 +3451,13 @@ Both of the hexadecimal constants above are of type `uint`. Because the constant
 
 The `checked` and `unchecked` operators and statements allow programmers to control certain aspects of some numeric calculations. However, the behavior of some numeric operators depends on their operands' data types. For example, multiplying two decimals always results in an exception on overflow even within an explicitly `unchecked` construct. Similarly, multiplying two floats never results in an exception on overflow even within an explicitly `checked` construct. In addition, other operators are never affected by the mode of checking, whether default or explicit.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> For purposes of expression tree conversion, no expression tree nodes are constructed to represent an `unchecked` or a `checked` context. Instead, `Checked` variants of query expression tree factories are used, and `Q.Flags.CheckedContext` flags are passed to generalized expression tree factories.
+>
+> ***TODO***
+> * Determine if `Q.Flags.CheckedContext` should be passed to **all** nodes constructed within a `checked` context. In particular, pass this flag not only to `Add`, `Multiple`, `Subtract`, and `Negate` factory methods. This could enable expression tree libraries to interpret `checked` more broadly, for instance when the user calls `Math.Pow` and an expression tree library supports a checked variant for well-known methods when evaluating or translating such an expression.
+
 ### Default value expressions
 
 A default value expression is used to obtain the default value ([Default values](variables.md#default-values)) of a type. Typically a default value expression is used for type parameters, since it may not be known if the type parameter is a value type or a reference type. (No conversion exists from the `null` literal to a type parameter unless the type parameter is known to be a reference type.)
@@ -2274,6 +3472,29 @@ If the *type* in a *default_value_expression* evaluates at run-time to a referen
 
 A *default_value_expression* is a constant expression ([Constant expressions](expressions.md#constant-expressions)) if the type is a reference type or a type parameter that is known to be a reference type ([Type parameter constraints](classes.md#type-parameter-constraints)). In addition, a *default_value_expression* is a constant expression if the type is one of the following value types: `sbyte`, `byte`, `short`, `ushort`, `int`, `uint`, `long`, `ulong`, `char`, `float`, `double`, `decimal`, `bool`, or any enumeration type.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> A `default` expression
+>
+> ```csharp
+> default(T)
+> ```
+>
+> when subject to conversion to a query expression tree, is translated into
+>
+> ```csharp
+> Expression.Constant(default(T), typeof(T))
+> ```
+>
+> and when subject to conversion to a generalized expression tree, is translated into
+>
+> ```csharp
+> Q.Default(default(Q.Flags), type)
+> ```
+>
+> where `type` is an expression of type `Type` representing the type `T`, and where the first flags parameter is reserved for future use.
+>
+> Note that generalized expression trees introduce a special node for default expressions, allowing expression tree libraries to distinguish a default literal (for instance `0`) from a default expression (for instance `default(int)`).
 
 ### Nameof expressions
 
@@ -2313,6 +3534,70 @@ A *nameof_expression* is a constant expression of type `string`, and has no effe
 These are the same transformations applied in [Identifiers](lexical-structure.md#identifiers) when testing equality between identifiers.
 
 TODO: examples
+
+> __Expression Tree Conversion Translation Steps__
+>
+> A `nameof` expression
+>
+> ```csharp
+> nameof(named_entity)
+> ```
+>
+> when subject to conversion to a query expression tree, is translated into
+>
+> ```csharp
+> Expression.Constant(name, typeof(string))
+> ```
+>
+> and when subject to conversion to a generalized expression tree, is translated into
+>
+> ```csharp
+> Q.Constant(Q.Flags.CompilerGenerated, name, typeof(string))
+> ```
+>
+> where `name` is an expression of type `string` containing the value of the `nameof` expression as described above.
+>
+> ***TODO***:
+> * Should generalized expression trees use a `Q.NameOf` factory instead?
+>   * This conveys the original intent better., thus allowing
+>      * expression tree libraries to make use of `nameof` resilient when they carry out tree transformations (e.g. renaming a variable, rebind types and members, etc.)
+>   * Should overloads of `NameOf` accept
+>     * a parameter of type `Type`, if the named entity refers to a type, or,
+>     * a parameter of type `T`, where `T` is the return type of `Q.Variable` or `Q.Parameter`, if the named entity refers to a variable, or,
+>     * a parameter of type `MemberInfo`, if the named entity refers to an unambiguous member, which may
+>       * be questionable because introduction of ambiguity, e.g. by adding an overload, would cause the expression tree to start binding to another overload of `NameOf`, but it wouldn't regress to calling `Constant`), or,
+>       * require a more sophisticated parameter list that tries to retain as much semantic info as possible (e.g. `Type, string` to refer to a member on a given type),
+>     * a parameter of type `string` for all other cases.
+>
+> Given the above observations, a possible alternative formulation is:
+>
+>> and when subject to conversion to a generalized expression tree, is translated into
+>>
+>> ```csharp
+>> Q.NameOf(default(Q.Flags), type)
+>> ```
+>>
+>> if `named_entity` uniquely identifies a type, where `type` is an expression of type `Type` representing this type, or
+>>
+>> ```csharp
+>> Q.NameOf(default(Q.Flags), type, name)
+>> ```
+>>
+>> if `named_entity` identifies a member on a type, where `type` is an expression of type `Type` representing this type, and `name` is an expression of type `string` representing the name of the member, or
+>>
+>> ```csharp
+>> Q.NameOf(default(Q.Flags), expr)
+>> ```
+>>
+>> if `named_entity` refers to a variable or a parameter that occurs in the expression tree being translated, where `expr` is an expression tree node representing the variable or parameter being referenced, or
+>>
+>> ```csharp
+>> Q.NameOf(Q.Flags.CompilerGenerated, name)
+>> ```
+>>
+>> otherwise, where `name` is an expression of type `string` containing the value of the `nameof` expression as described above.
+>>
+>> ***TODO***: Note that the `nameof` expression does not allow referring to a label as a named entity. If this were added, the third case could be altered to include referring to an expression tree node representing a label.
 
 ### Anonymous method expressions
 
@@ -2394,7 +3679,7 @@ If `E0` is classified as nothing, then `E` is classified as nothing. Otherwise E
 
       except that `P` is evaluated only once.
 
-   *  Otherwise the type of E is T0, and the meaning of E is the same as
+   *  Otherwise the type of `E` is `T0`, and the meaning of `E` is the same as
 
       ```csharp
       ((object)P == null) ? null : E1
@@ -2427,6 +3712,56 @@ and assuming that the type of the final invocation is not a non-nullable value t
 var x = (a.b == null) ? null : (a.b[0] == null) ? null : a.b[0].c();
 ```
 except that `a.b` and `a.b[0]` are evaluated only once.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> A *null_conditional_expression*
+>
+> ```antlr
+> null_conditional_expression
+>     : primary_expression null_conditional_operations
+>     ;
+>
+> null_conditional_operations
+>     : null_conditional_operations? '?' '.' identifier type_argument_list?
+>     | null_conditional_operations? '?' '[' argument_list ']'
+>     | null_conditional_operations '.' identifier type_argument_list?
+>     | null_conditional_operations '[' argument_list ']'
+>     | null_conditional_operations '(' argument_list? ')'
+>     ;
+> ```
+>
+> is translated to an expression tree as follows.
+>
+> If none of the *null_conditional_operation* contains a `?` token, the expression does not involve any null-conditional evaluation and is converted to an expression tree using the rules for member access ([Member access](#member-access)), element access ([Element access](#element-access)), or invocation expressions ([Invocation expressions](#invocation-expressions)). Otherwise, the rules below apply.
+>
+> When converted to a query expression tree, a compile-time error occurs.
+>
+> When converted to a generalized expression tree, first translate a *null_conditional_expression* by textually splitting the expression at the first occurrence of `?`:
+>
+> * `R` is the expression constructed from the portion preceding the first `?` token in the expression, and,
+> * `C` is the expression constructed from a compiler-generated identifier `t` (which is otherwise invisible) and from the portion `O` succeeding the first `?` token in the expression, such that `C` is of the form `tO`.
+>
+> For example, an expression `a.b?[0]?.c()` is split into `a.b` (for `R`) and `t[0]?c()` (for `C`).
+>
+> Next, construct an expression `expr` by converting expression `R` to an expression tree, and construct an expression `type` of of type `Type` representing type `N` which is the non-nullable variant of `T`, where `T` is the type of `R`:
+>
+> * If `T` is a nullable value type `U?`, `N` is defined to be `U`.
+> * Otherwise, if `T` is a non-nullable value type or a reference type, `N` is defined to be `T`.
+>
+> Expression tree conversion then proceeds as follows. First, construct a node representing the null-conditional receiver
+>
+> ```csharp
+> var r = Q.ConditionalReceiver(default(Q.Flags), type);
+> ```
+>
+> where `r` is a compiler-generated identifier that is otherwise invisible. Next, convert the expression `C` to an expression tree `nonNullExpr`, converting the single occurrence of identifier `t` to `r`, as defined above. Finally, translate the *null_conditional_expression* to
+>
+> ```csharp
+> Q.ConditionalAccess(default(Q.Flags), expr, r, nonNullExpr)
+> ```
+>
+> This translation can be thought of as introducing a variable `t`, holding the result of evaluating `R` to a non-null value, in the scope of `C`.
 
 #### Null-conditional expressions as projection initializers
 
@@ -2470,6 +3805,66 @@ decimal operator +(decimal x);
 
 For each of these operators, the result is simply the value of the operand.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> A `+` unary plus expression
+>
+> ```csharp
+> +expression
+> ```
+>
+> is translated into an expression tree by first translating `expression` to `expr`, and by optionally constructing an expression `method` of type `MethodInfo` representing the user-defined `operator +` implementation, if the operator is bound to a user-defined unary operator. Expression tree translation then proceeds as follows.
+>
+> When subject to conversion to a query expression tree, and `expression` has type `dynamic`, translation fails and an error is reported. Otherwise, it is translated into
+>
+> ```csharp
+> Expression.UnaryPlus(expr, method)
+> ```
+>
+> if the operator is bound to a user-defined implementation of the unary `operator +`, or into
+>
+> ```csharp
+> expr
+> ```
+>
+> otherwise. That is, the unary plus operator is optimized away in this case.
+>
+> When subject to conversion to a generalized expression tree, it is translated into
+>
+> ```csharp
+> Q.UnaryPlus(info, expr)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.UnaryPlusInfo(binder)
+> ```
+>
+> if `expression` is of type `dynamic`, where `binder` is an expression of type `Microsoft.CSharp.RuntimeBinder.CallSiteBinder` representing the dynamic operation, or
+>
+> ```csharp
+> Q.UnaryPlusInfo(flags, method)
+> ```
+>
+> if the operator is bound to a user-defined implementation of the unary `operator +`, or
+>
+> ```csharp
+> Q.UnaryPlusInfo(flags)
+> ```
+>
+> otherwise, where `flags` is either:
+>
+> * `Q.Flags.CheckedContext` if the unary plus expression occurs in a checked context, or,
+> * `default(Q.Flags)` otherwise.
+>
+> Note that the behavior of the unary plus operator is typically not affected by the use in a checked context. For purposes of generalized expression trees, this information is retained for all operators, and passed as a flag. The bound expression tree library is free to ignore this information.
+>
+> ***TODO***:
+> * Evaluate options for the dynamic case:
+>   * create a specification for the construction of `binder` (can also be used to specify `dynamic` behavior outside the context of expression trees) and consider making more properties on the `Microsoft.CSharp.RuntimeBinder` library types publicly accessable so expression tree libraries can inspect this info, or,
+>   * steer away from reusing `Microsoft.CSharp` and introduce a `UnaryPlusInfo` factory overload for dynamic binding (e.g. a `(Q.DynamicFlags flags, Type context, A argumentInfo)` overload, where `A` is built through factory invocations as well).
+
 ### Unary minus operator
 
 For an operation of the form `-x`, unary operator overload resolution ([Unary operator overload resolution](expressions.md#unary-operator-overload-resolution)) is applied to select a specific operator implementation. The operand is converted to the parameter type of the selected operator, and the type of the result is the return type of the operator. The predefined negation operators are:
@@ -2504,6 +3899,72 @@ For an operation of the form `-x`, unary operator overload resolution ([Unary op
 
    The result is computed by subtracting `x` from zero. Decimal negation is equivalent to using the unary minus operator of type `System.Decimal`.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> A `-` unary minus expression
+>
+> ```csharp
+> -expression
+> ```
+>
+> is translated into an expression tree by first translating `expression` to `expr`, and by optionally constructing an expression `method` of type `MethodInfo` representing the user-defined `operator -` implementation, if the operator is bound to a user-defined unary operator. Expression tree translation then proceeds as follows.
+>
+> When subject to conversion to a query expression tree, and `expression` has type `dynamic`, translation fails and an error is reported. Otherwise, it is translated into
+>
+> ```csharp
+> Expression.Negate(expr, method)
+> ```
+>
+> if the operator is bound to a user-defined implementation of the unary `operator -`. Otherwise, it is translated into
+>
+> ```csharp
+> Expression.NegateChecked(expr)
+> ```
+>
+> if the unary minus expression occurs in a checked context, or
+>
+> ```csharp
+> Expression.Negate(expr)
+> ```
+>
+> otherwise.
+>
+> When subject to conversion to a generalized expression tree, it is translated into
+>
+> ```csharp
+> Q.Negate(info, expr)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.NegateInfo(binder)
+> ```
+>
+> if `expression` is of type `dynamic`, where `binder` is an expression of type `Microsoft.CSharp.RuntimeBinder.CallSiteBinder` representing the dynamic operation, or
+>
+> ```csharp
+> Q.NegateInfo(flags, method)
+> ```
+>
+> if the operator is bound to a user-defined implementation of the unary `operator -`, or
+>
+> ```csharp
+> Q.NegateInfo(flags)
+> ```
+>
+> otherwise, where `flags` is either:
+>
+> * `Q.Flags.CheckedContext` if the unary minus expression occurs in a checked context, or,
+> * `default(Q.Flags)` otherwise.
+>
+> Note that the behavior of a user-defined unary negation operator is typically not affected by the use in a checked context. For purposes of generalized expression trees, this information is retained for all operators, and passed as a flag. The bound expression tree library is free to ignore this information.
+>
+> ***TODO***:
+> * Evaluate options for the dynamic case:
+>   * create a specification for the construction of `binder` (can also be used to specify `dynamic` behavior outside the context of expression trees) and consider making more properties on the `Microsoft.CSharp.RuntimeBinder` library types publicly accessable so expression tree libraries can inspect this info, or,
+>   * steer away from reusing `Microsoft.CSharp` and introduce a `NegateInfo` factory overload for dynamic binding (e.g. a `(Q.DynamicFlags flags, Type context, A argumentInfo)` overload, where `A` is built through factory invocations as well).
+
 ### Logical negation operator
 
 For an operation of the form `!x`, unary operator overload resolution ([Unary operator overload resolution](expressions.md#unary-operator-overload-resolution)) is applied to select a specific operator implementation. The operand is converted to the parameter type of the selected operator, and the type of the result is the return type of the operator. Only one predefined logical negation operator exists:
@@ -2512,6 +3973,64 @@ bool operator !(bool x);
 ```
 
 This operator computes the logical negation of the operand: If the operand is `true`, the result is `false`. If the operand is `false`, the result is `true`.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> A `!` unary logical negation expression
+>
+> ```csharp
+> !expression
+> ```
+>
+> is translated into an expression tree by first translating `expression` to `expr`, and by optionally constructing an expression `method` of type `MethodInfo` representing the user-defined `operator !` implementation, if the operator is bound to a user-defined unary operator. Expression tree translation then proceeds as follows.
+>
+> When subject to conversion to a query expression tree, and `expression` has type `dynamic`, translation fails and an error is reported. Otherwise, it is translated into
+>
+> ```csharp
+> Expression.Not(expr, method)
+> ```
+>
+> if the operator is bound to a user-defined implementation of the unary `operator !`. Otherwise, it is translated into
+>
+> ```csharp
+> Expression.Not(expr)
+> ```
+>
+> When subject to conversion to a generalized expression tree, it is translated into
+>
+> ```csharp
+> Q.Not(info, expr)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.NotInfo(binder)
+> ```
+>
+> if `expression` is of type `dynamic`, where `binder` is an expression of type `Microsoft.CSharp.RuntimeBinder.CallSiteBinder` representing the dynamic operation, or
+>
+> ```csharp
+> Q.NotInfo(flags, method)
+> ```
+>
+> if the operator is bound to a user-defined implementation of the unary `operator !`, or
+>
+> ```csharp
+> Q.NotInfo(flags)
+> ```
+>
+> otherwise, where `flags` is either:
+>
+> * `Q.Flags.CheckedContext` if the unary logical negation expression occurs in a checked context, or,
+> * `default(Q.Flags)` otherwise.
+>
+> Note that the behavior of a unary logical negation operator is typically not affected by the use in a checked context. For purposes of generalized expression trees, this information is retained for all operators, and passed as a flag. The bound expression tree library is free to ignore this information.
+>
+> ***TODO***:
+> * Evaluate options for the dynamic case:
+>   * create a specification for the construction of `binder` (can also be used to specify `dynamic` behavior outside the context of expression trees) and consider making more properties on the `Microsoft.CSharp.RuntimeBinder` library types publicly accessable so expression tree libraries can inspect this info, or,
+>   * steer away from reusing `Microsoft.CSharp` and introduce a `NotInfo` factory overload for dynamic binding (e.g. a `(Q.DynamicFlags flags, Type context, A argumentInfo)` overload, where `A` is built through factory invocations as well).
 
 ### Bitwise complement operator
 
@@ -2532,6 +4051,66 @@ E operator ~(E x);
 ```
 
 The result of evaluating `~x`, where `x` is an expression of an enumeration type `E` with an underlying type `U`, is exactly the same as evaluating `(E)(~(U)x)`, except that the conversion to `E` is always performed as if in an `unchecked` context ([The checked and unchecked operators](expressions.md#the-checked-and-unchecked-operators)).
+
+> __Expression Tree Conversion Translation Steps__
+>
+> A `~` unary bitwise complement expression
+>
+> ```csharp
+> ~expression
+> ```
+>
+> is translated into an expression tree by first translating `expression` to `expr`, and by optionally constructing an expression `method` of type `MethodInfo` representing the user-defined `operator ~` implementation, if the operator is bound to a user-defined unary operator. Expression tree translation then proceeds as follows.
+>
+> When subject to conversion to a query expression tree, and `expression` has type `dynamic`, translation fails and an error is reported. Otherwise, it is translated into
+>
+> ```csharp
+> Expression.Not(expr, method)
+> ```
+>
+> if the operator is bound to a user-defined implementation of the unary `operator ~`. Otherwise, it is translated into
+>
+> ```csharp
+> Expression.Not(expr)
+> ```
+>
+> Note that query expression trees are not using a `OnesComplement` factory for purposes of compatibility.
+>
+> When subject to conversion to a generalized expression tree, it is translated into
+>
+> ```csharp
+> Q.OnesComplement(info, expr)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.OnesComplementInfo(binder)
+> ```
+>
+> if `expression` is of type `dynamic`, where `binder` is an expression of type `Microsoft.CSharp.RuntimeBinder.CallSiteBinder` representing the dynamic operation, or
+>
+> ```csharp
+> Q.OnesComplementInfo(flags, method)
+> ```
+>
+> if the operator is bound to a user-defined implementation of the unary `operator ~`, or
+>
+> ```csharp
+> Q.OnesComplementInfo(flags)
+> ```
+>
+> otherwise, where `flags` is either:
+>
+> * `Q.Flags.CheckedContext` if the unary ones complement expression occurs in a checked context, or,
+> * `default(Q.Flags)` otherwise.
+>
+> Note that the behavior of a unary bitwise complement operator is typically not affected by the use in a checked context. For purposes of generalized expression trees, this information is retained for all operators, and passed as a flag. The bound expression tree library is free to ignore this information.
+>
+> ***TODO***:
+> * Evaluate options for the dynamic case:
+>   * create a specification for the construction of `binder` (can also be used to specify `dynamic` behavior outside the context of expression trees) and consider making more properties on the `Microsoft.CSharp.RuntimeBinder` library types publicly accessable so expression tree libraries can inspect this info, or,
+>   * steer away from reusing `Microsoft.CSharp` and introduce a `OnesComplementInfo` factory overload for dynamic binding (e.g. a `(Q.DynamicFlags flags, Type context, A argumentInfo)` overload, where `A` is built through factory invocations as well).
 
 ### Prefix increment and decrement operators
 
@@ -2569,6 +4148,59 @@ The `++` and `--` operators also support postfix notation ([Postfix increment an
 
 An `operator++` or `operator--` implementation can be invoked using either postfix or prefix notation. It is not possible to have separate operator implementations for the two notations.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> A `++` and `--` unary prefix increment and decrement expressions
+>
+> ```csharp
+> ++expression
+> --expression
+> ```
+>
+> are translated into an expression tree by first translating `expression` to `expr`, and by optionally constructing an expression `method` of type `MethodInfo` representing the user-defined `operator ++` or `operator --` implementation, if the operator is bound to a user-defined operator. Expression tree translation then proceeds as follows.
+>
+> When subject to conversion to a query expression tree, an error is reported.
+>
+> When subject to conversion to a generalized expression tree, it is translated into either of
+>
+> ```csharp
+> Q.PreIncrement(info, expr)
+> Q.PreDecrement(info, expr)
+> ```
+>
+> where `info` is either of
+>
+> ```csharp
+> Q.PreIncrementInfo(binder)
+> Q.PreDecrementInfo(binder)
+> ```
+>
+> if `expression` is of type `dynamic`, where `binder` is an expression of type `Microsoft.CSharp.RuntimeBinder.CallSiteBinder` representing the dynamic operation, or
+>
+> ```csharp
+> Q.PreIncrementInfo(flags, method)
+> Q.PreDecrementInfo(flags, method)
+> ```
+>
+> if the operator is bound to a user-defined implementation of the `operator ++` or `operator --`, or
+>
+> ```csharp
+> Q.PreIncrementInfo(flags)
+> Q.PreDecrementInfo(flags)
+> ```
+>
+> otherwise, where `flags` is either:
+>
+> * `Q.Flags.CheckedContext` if the prefix increment or decrement expression occurs in a checked context, or,
+> * `default(Q.Flags)` otherwise.
+>
+> Note that the behavior of a user-defined increment or decrement operator is typically not affected by the use in a checked context. For purposes of generalized expression trees, this information is retained for all operators, and passed as a flag. The bound expression tree library is free to ignore this information.
+>
+> ***TODO***:
+> * Evaluate options for the dynamic case:
+>   * create a specification for the construction of `binder` (can also be used to specify `dynamic` behavior outside the context of expression trees) and consider making more properties on the `Microsoft.CSharp.RuntimeBinder` library types publicly accessable so expression tree libraries can inspect this info, or,
+>   * steer away from reusing `Microsoft.CSharp` and introduce a `Pre*Info` factory overload for dynamic binding (e.g. a `(Q.DynamicFlags flags, Type context, A argumentInfo)` overload, where `A` is built through factory invocations as well).
+
 ### Cast expressions
 
 A *cast_expression* is used to explicitly convert an expression to a given type.
@@ -2591,6 +4223,73 @@ To resolve *cast_expression* ambiguities, the following rule exists: A sequence 
 The term "correct grammar" above means only that the sequence of tokens must conform to the particular grammatical production. It specifically does not consider the actual meaning of any constituent identifiers. For example, if `x` and `y` are identifiers, then `x.y` is correct grammar for a type, even if `x.y` doesn't actually denote a type.
 
 From the disambiguation rule it follows that, if `x` and `y` are identifiers, `(x)y`, `(x)(y)`, and `(x)(-y)` are *cast_expression*s, but `(x)-y` is not, even if `x` identifies a type. However, if `x` is a keyword that identifies a predefined type (such as `int`), then all four forms are *cast_expression*s (because such a keyword could not possibly be an expression by itself).
+
+> __Expression Tree Conversion Translation Steps__
+>
+> A cast expression
+>
+> ```csharp
+> (T)expression
+> ```
+>
+> is translated into an expression tree by first translating `expression` to `expr`, by constructing an expression `type` of type `Type` from `typeof(T)` if `T` is not `dynamic` or `typeof(object)` if `T` is `dynamic`, and by optionally constructing an expression `method` of type `MethodInfo` representing the user-defined `implicit operator T` or `explicit operator T` implementation, if the operator is bound to a user-defined unary operator. Expression tree translation then proceeds as follows.
+>
+> When subject to conversion to a query expression tree, and `expression` has type `dynamic`, translation fails and an error is reported. Otherwise, it is translated into
+>
+> ```csharp
+> Expression.Convert(expr, type, method)
+> ```
+>
+> if the operator is bound to a user-defined implementation of `implicit operator T` or `explicit operator T`, or
+>
+> ```csharp
+> Expression.ConvertChecked(expr, type)
+> ```
+>
+> if the conversion occurs in a checked context, or
+>
+> ```csharp
+> Expression.Convert(expr, type)
+> ```
+>
+> otherwise.
+>
+> When subject to conversion to a generalized expression tree, it is translated into
+>
+> ```csharp
+> Q.Convert(info, expr)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.ConvertInfo(type, binder)
+> ```
+>
+> if `expression` is of type `dynamic`, where `binder` is an expression of type `Microsoft.CSharp.RuntimeBinder.CallSiteBinder` representing the dynamic operation, or
+>
+> ```csharp
+> Q.ConvertInfo(flags, type, method)
+> ```
+>
+> if the operator is bound to a user-defined implementation of `implicit operator T` or `explicit operator T`, or
+>
+> ```csharp
+> Q.ConvertInfo(flags, type)
+> ```
+>
+> otherwise, where `flags` is a bitwise `|` of any of the following:
+>
+> * `default(Q.Flags)`,
+> * `Q.Flags.CheckedContext` if the cast expression occurs in a checked context,
+> * `Q.Flags.CompilerGenerated` if the cast expression was inserted (for instance, when translating implicit conversions).
+>
+> Note that the behavior of a user-defined cast operator is typically not affected by the use in a checked context. For purposes of generalized expression trees, this information is retained for all operators, and passed as a flag. The bound expression tree library is free to ignore this information.
+>
+> ***TODO***:
+> * Evaluate options for the dynamic case:
+>   * create a specification for the construction of `binder` (can also be used to specify `dynamic` behavior outside the context of expression trees) and consider making more properties on the `Microsoft.CSharp.RuntimeBinder` library types publicly accessable so expression tree libraries can inspect this info, or,
+>   * steer away from reusing `Microsoft.CSharp` and introduce a `ConvertInfo` factory overload for dynamic binding (e.g. a `(Q.DynamicFlags flags, Type context, Type type)` overload).
 
 ### Await expressions
 
@@ -2652,6 +4351,53 @@ At runtime, the expression `await t` is evaluated as follows:
 
 An awaiter's implementation of the interface methods `INotifyCompletion.OnCompleted` and `ICriticalNotifyCompletion.UnsafeOnCompleted` should cause the delegate `r` to be invoked at most once. Otherwise, the behavior of the enclosing async function is undefined.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> An await expression
+>
+> ```csharp
+> await expression
+> ```
+>
+> is translated into an expression tree by first translating `expression` to `expr`, and by constructing the following if the type of `expression` is not `dynamic`:
+>
+> * an expression `getAwaiter` of type `MethodInfo` representing the bound `GetAwaiter` method,
+> * an expression `isCompleted` of type `MethodInfo` representing the get accessor method of the bound `IsCompleted` property, and,
+> * an expression `getResult` of type `MethodInfo` representing the bound `GetResult` method.
+>
+> Expression tree translation then proceeds as follows.
+>
+> When subject to conversion to a query expression tree, an error is reported.
+>
+> When subject to conversion to a generalized expression tree, it is translated into
+>
+> ```csharp
+> Q.Await(info, expr)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.AwaitInfo(context)
+> ```
+>
+> if `expression` is of type `dynamic`, where `context` is an expression of type `Type` representing the nearest parent type where the await expression is used (for purposes of runtime binding), or
+>
+> ```csharp
+> Q.AwaitInfo(default(Q.Flags), getAwaiter, isCompleted, getResult)
+> ```
+>
+> otherwise, where the first flags parameter is reserved for future use.
+>
+> Note that the expression tree library can trivially infer any of the following from the supplied parameters to `AwaitInfo`:
+>
+> * whether `GetAwaiter` is an extension method by checking if the method is `static`,
+> * the awaiter type `A` by checking the return type of the `GetAwaiter` method,
+> * the type of the await expression by checking the return type of the `GetResult` method, and,
+> * whether the awaiter type `A` implements `ICriticalNotifyCompletion`.
+>
+> That is, `AwaitInfo` gets passed all bound members used to evaluate the await expression, which are hard or impossible to look up at runtime using the rules described in this specification. For example, `GetAwaiter` cannot be determined at runtime if it is an extension method, due to the lack of knowledge about imported namespaces.
+
 ## Arithmetic operators
 
 The `*`, `/`, `%`, `+`, and `-` operators are called the arithmetic operators.
@@ -2672,6 +4418,98 @@ additive_expression
 ```
 
 If an operand of an arithmetic operator has the compile-time type `dynamic`, then the expression is dynamically bound ([Dynamic binding](expressions.md#dynamic-binding)). In this case the compile-time type of the expression is `dynamic`, and the resolution described below will take place at run-time using the run-time type of those operands that have the compile-time type `dynamic`.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> Expression tree conversion of arithmetic expressions of the form
+>
+> ```csharp
+> l op r
+> ```
+>
+> where `l` and `r` are expressions, and `op` is any of the `*`, `/`, `%`, `+`, or `-` operators, proceeds by first defining an identifier `M` with value
+>
+> * `Add` if `op` is `+`, or,
+> * `Subtract` if `op` is `-`, or,
+> * `Multiply` if `op` is `*`, or,
+> * `Divide` if `op` is `/`, or,
+> * `Modulo` if `op` is `%`,
+>
+> and by optionally rewriting `l` and `r` to `(L)(l)` and `(R)(r)` if either operand requires an implicit conversion, for instance due to numeric promotion ([Numeric promotion](#numeric-promotions)), or more generally overload resolution ([Overload resolution](#overload-resolution)), or lifting ([Lifted operators](#lifted-operators)), or conversions described in any of the subsections below. Any cast expression introduced as part of this rewrite step is classified as compiler-generated.
+>
+> After the rewrite step, construct expressions `lExpr` and `rExpr` by translating the result of rewriting `l` and `r` to expression trees, and optionally construct expression `method` of type `MethodInfo` representing the static method implementing the operator, which can be any of
+>
+> * a method implementing a user-defined operator, or,
+> * a method defined in any of the subsections below.
+>
+> Expression tree conversion then proceeds as follows.
+>
+> When converted to a query expression tree, if the operation is dynamically bound, a compile-time error occurs. Otherwise, it is translated into
+>
+> ```csharp
+> Expression.M(lExpr, rExpr, method)
+> ```
+>
+> if `method` is defined, or
+>
+> ```csharp
+> Expression.MChecked(lExpr, rExpr)
+> ```
+>
+> otherwise, if all of the following conditions hold:
+>
+> * the operation occurs in a checked context, and,
+> * the operator is `+`, `-`, or `*`, and,
+> * any of the following conditions hold:
+>   * the operation is `+` or `-` defined on enum types, or,
+>   * the operation is predefined on `int`, `uint`, `long`, or `ulong`, or
+>   * the operation involves numeric promotion of any of the above, or,
+>   * the operation is the lifted variant of any of the above,
+>
+> or
+>
+> ```csharp
+> Expression.M(lExpr, rExpr)
+> ```
+>
+> otherwise. A few examples can help to clarify these rules:
+>
+> * `unchecked(a + b)` on operands of type `int` uses method `Add`,
+> * `checked(a - b)` on operands of type `int` uses method `SutbractChecked`,
+> * `checked(a * b)` on operands of type `decimal` uses method `Multiply` because `method` is defined,
+> * `checked(a / b)` uses method `Divide` because `/` does not have a checked variant.
+>
+> When converted to a a generalized expression tree, it is translated into
+>
+> ```csharp
+> Q.M(info, lExpr, rExpr)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.MInfo(binder)
+> ```
+>
+> if the operation is dynamically bound, where where `binder` is an expression of type `Microsoft.CSharp.RuntimeBinder.CallSiteBinder` representing the dynamic operation, or
+>
+> ```csharp
+> Q.MInfo(flags, method)
+> ```
+>
+> if `method` is defined, or,
+>
+> ```csharp
+> Q.MInfo(flags)
+> ```
+>
+> where flags is the bitwise `|` combination of any of the following:
+>
+> * `Q.Flags.Checked` if the operation occurs in a checked context,
+> * `Q.Flags.IsLifted` if the operation involves lifting to null,
+> * `default(Q.Flags)` if none of these apply.
+>
+> Note that generalized expression trees retain information about the checked context under all circumstances and use a flag to represent this information. This enables expression tree libraries to interpret the meaning of checked arithmetic which may be relevant to expression evaluation involving user-defined operators. For instance, a `+` operator defined on `Matrix` values may benefit from applying checked arithmetic to the `+` operation applied to the elements of the matrices.
 
 ### Multiplication operator
 
@@ -2720,6 +4558,10 @@ The predefined multiplication operators are listed below. The operators all comp
    If the resulting value is too large to represent in the `decimal` format, a `System.OverflowException` is thrown. If the result value is too small to represent in the `decimal` format, the result is zero. The scale of the result, before any rounding, is the sum of the scales of the two operands.
 
    Decimal multiplication is equivalent to using the multiplication operator of type `System.Decimal`.
+
+   > __Expression Tree Conversion Translation Steps__
+   >
+   > For purposes of expression tree conversion of decimal multiplication, `method` is defined as the `op_Multiply` method defined on `System.Decimal`.
 
 
 ### Division operator
@@ -2773,6 +4615,10 @@ The predefined division operators are listed below. The operators all compute th
 
    Decimal division is equivalent to using the division operator of type `System.Decimal`.
 
+   > __Expression Tree Conversion Translation Steps__
+   >
+   > For purposes of expression tree conversion of decimal division, `method` is defined as the `op_Division` method defined on `System.Decimal`.
+
 
 ### Remainder operator
 
@@ -2823,6 +4669,10 @@ The predefined remainder operators are listed below. The operators all compute t
 
    Decimal remainder is equivalent to using the remainder operator of type `System.Decimal`.
 
+   > __Expression Tree Conversion Translation Steps__
+   >
+   > For purposes of expression tree conversion of decimal remainder, `method` is defined as the `op_Modulus` method defined on `System.Decimal`.
+
 
 ### Addition operator
 
@@ -2870,6 +4720,10 @@ The predefined addition operators are listed below. For numeric and enumeration 
 
    Decimal addition is equivalent to using the addition operator of type `System.Decimal`.
 
+   > __Expression Tree Conversion Translation Steps__
+   >
+   > For purposes of expression tree conversion of decimal addition, `method` is defined as the `op_Addition` method defined on `System.Decimal`.
+
 *  Enumeration addition. Every enumeration type implicitly provides the following predefined operators, where `E` is the enum type, and `U` is the underlying type of `E`:
 
    ```csharp
@@ -2878,6 +4732,52 @@ The predefined addition operators are listed below. For numeric and enumeration 
    ```
 
    At run-time these operators are evaluated exactly as `(E)((U)x + (U)y)`.
+
+   > __Expression Tree Conversion Translation Steps__
+   >
+   > Expression tree conversion for enum addition uses an expansion similar to the one shown above, but with some differences to support nullable lifting and promotion of numeric underlying types.
+   >
+   > Consider an expression of the form `e + i` or `i + e`, where `e` has type `E` which is an enum type or a nullable enum type, and `i` has type `I` which is an integer type, a nullable integer type, or is implicitly convertible to an integer type or a nullable integer type.
+   >
+   > If `E` is a non-nullable enum type, let `U` be the underlying type of `E`. If `U` is `int`, `uint`, `long`, or `ulong`, rewrite `e` to `(U)e` and optionally rewrite `i` to `(U)i` if an implicit conversion from `I` to `U` is defined. Otherwise, if `U` is `byte`, `sbyte`, `short`, or `ushort`, rewrite `e` to `(int)e` and rewrite `i` to `(int)(U)i` if an implicit conversion from `I` to `U` is defined, or rewrite `i` to `(int)i` otherwise.
+   >
+   > If `E` is a nullable type `E0?` where `E0` is an enum type, let `U` be the underlying type of `E0`. If `U` is `int`, `uint`, `long`, or `ulong`, rewrite `e` to `(U?)e` and optionally rewrite `i` to `(U?)i` if an implicit conversion from `I` to `U` or from `I?` to `U?` is defined. Otherwise, if `U` is `byte`, `sbyte`, `short`, or `ushort`, rewrite `e` to `(int?)e` and rewrite `i` to `(int?)(U)i` or `(int?)(U?)i` if an implicit conversion from `I` to `U` or from `I?` to `U?` is defined, or rewrite `i` to `(int?)i` otherwise.
+   >
+   > Expression tree conversion then proceeds by translating `(E)(e + i)` or `(E)(i + e)`. All conversions introduced in the preceding steps are classified as compiler-generated.
+   >
+   > Also note that all conversion and addition operations in the resulting expression are subject to checked arithmetic if they occur in a checked context. For example, in query expression trees this will result in the use of `AddChecked` and `ConvertChecked`; in generalized expression trees this will result in the use of the `Q.Flags.CheckedContext` flags.
+   >
+   > For example, given
+   >
+   > ```csharp
+   > enum IntEnum : int {}
+   > enum ByteEnum : byte {}
+   >
+   > struct ToByte
+   > {
+   >     public static implicit operator byte(ToByte b) => ...
+   > }
+   > ```
+   >
+   > the following conversions take place prior to expression tree translation:
+   >
+   > * an expression `ie + i` where `ie` is of type `IntEnum` and `i` is of type `int` is converted to `(IntEnum)((int)ie + i)`,
+   > * an expression `be + b` where `be` is of type `ByteEnum` and `b` is of type `byte` is converted to `(ByteEnum)((int)be + (int)b)`,
+   > * an expression `nbe + nb` where `nbe` is of type `ByteEnum?` and `nb` is of type `byte?` is converted to `(ByteEnum?)((int?)nbe + (int?)nb)`,
+   > * an expression `be + tb` where `be` is of type `ByteEnum` and `tb` is of type `ToByte` is converted to `(ByteEnum)((int)be + (int)(byte)tb)`.
+   >
+   > ***TODO***
+   > * These rules are very awkward because they try to capture the current behavior of the C# compiler when translating enum operations to expression trees, which is folding many conversions together.
+   > * For generalized expression trees, we should likely revisit these rules:
+   >   * We could state that all conversions prompted by the C# specification are inserted as-is.
+   >     * This can reduce the amount of expression tree-specific lingo in the C# specification.
+   >     * For example, `be + b` (as defined above) would translate to `(ByteEnum)((byte)be + (byte)b)` where the last conversion is redundant, but the C# specification here inserts it. Subsequent promotion from `byte` to `int` for the addition would further rewrite it to `(ByteEnum)((int)(byte)be + (int)(byte)b)`. Similar rules for nullable lifting would apply.
+   >   * Given the above, we could either
+   >     * leave the resulting expression as is, marking all these conversions as compiler-generated (using `Q.Flags.CompilerGenerated`), or,
+   >     * have a well-defined finite fixed set of optimizations that *will* be (thus, guaranteed to be) performed as part of expression tree translation, such as:
+   >       * remove identity conversion (e.g. `(byte)b` becomes `b`),
+   >       * coalesce numeric conversions (e.g. `(int)(byte)b` becomes `(int)b`)
+   >       * etc.
 
 *  String concatenation:
 
@@ -2909,6 +4809,44 @@ The predefined addition operators are listed below. For numeric and enumeration 
 
    The result of the string concatenation operator is a string that consists of the characters of the left operand followed by the characters of the right operand. The string concatenation operator never returns a `null` value. A `System.OutOfMemoryException` may be thrown if there is not enough memory available to allocate the resulting string.
 
+   > __Expression Tree Conversion Translation Steps__
+   >
+   > Expression tree conversion for string concatenation defines `method` as any of the following methods on `System.String`:
+   >
+   > * `Concat(string, string)`, if both operands are of type `string`, or
+   > * `Concat(object, object)`, otherwise,
+   >
+   > and introduces boxing conversions, which are classified as compiler-generated, on operands with a value type. For instance, the expression
+   >
+   > ```csharp
+   > s + x
+   > ```
+   >
+   > where `s` is an expression of type `string` and `x` is an expression of type `int` is translated to
+   >
+   > ```csharp
+   > Expression.Add(
+   >     sExpr,
+   >     Expression.Convert(xExpr, typeof(object)),
+   >     method
+   > )
+   > ```
+   >
+   > for query expression trees, and to
+   >
+   > ```csharp
+   > Q.Add(
+   >     Q.AddInfo(default(Q.Flags), method),
+   >     sExpr,
+   >     Q.Convert(
+   >         Q.ConvertInfo(Q.Flags.CompilerGenerated, typeof(object)),
+   >         xExpr
+   >     )
+   > )
+   > ```
+   >
+   > for generalized expression trees, where `sExpr` and `xExpr` are the result of translating `s` and `x` to expression trees.
+
 *  Delegate combination. Every delegate type implicitly provides the following predefined operator, where `D` is the delegate type:
 
    ```csharp
@@ -2916,6 +4854,37 @@ The predefined addition operators are listed below. For numeric and enumeration 
    ```
 
    The binary `+` operator performs delegate combination when both operands are of some delegate type `D`. (If the operands have different delegate types, a binding-time error occurs.) If the first operand is `null`, the result of the operation is the value of the second operand (even if that is also `null`). Otherwise, if the second operand is `null`, then the result of the operation is the value of the first operand. Otherwise, the result of the operation is a new delegate instance that, when invoked, invokes the first operand and then invokes the second operand. For examples of delegate combination, see [Subtraction operator](expressions.md#subtraction-operator) and [Delegate invocation](delegates.md#delegate-invocation). Since `System.Delegate` is not a delegate type, `operator` `+` is not defined for it.
+
+   > __Expression Tree Conversion Translation Steps__
+   >
+   > Expression tree conversion for delegate combination defines `method` as the `Combine(Delegate, Delegate)` method on `System.Delegate` and introduces a cast expression to `D` on the result, which is classified as compiler-generated. For instance, the expression
+   >
+   > ```csharp
+   > f1 + f2
+   > ```
+   >
+   > where `f1` and `f2` are expressions of delegate type `Func<int>` is translated to
+   >
+   > ```csharp
+   > Expression.Convert(
+   >     Expression.Add(f1Expr, f2Expr, method),
+   >     typeof(Func<int>)
+   > )
+   > ```
+   >
+   > for query expression trees, and to
+   >
+   > ```csharp
+   > Q.Convert(
+   >     Q.ConvertInfo(Q.Flags.CompilerGenerated, typeof(Func<int>))
+   >     Q.Add(
+   >         Q.AddInfo(default(Q.Flags), method),
+   >         f1Expr, f2Expr
+   >     )
+   > )
+   > ```
+   >
+   > for generalized expression trees, where `f1Expr` and `f2Expr` are the result of translating `f1` and `f2` to expression trees. Note that these conversions do not introduce a cast from `Func<int>` to `Delegate`; the only introduced conversion occurs on the result.
 
 ### Subtraction operator
 
@@ -2963,6 +4932,10 @@ The predefined subtraction operators are listed below. The operators all subtrac
 
    Decimal subtraction is equivalent to using the subtraction operator of type `System.Decimal`.
 
+   > __Expression Tree Conversion Translation Steps__
+   >
+   > For purposes of expression tree conversion of decimal subtraction, `method` is defined as the `op_Subtraction` method defined on `System.Decimal`.
+
 *  Enumeration subtraction. Every enumeration type implicitly provides the following predefined operator, where `E` is the enum type, and `U` is the underlying type of `E`:
 
    ```csharp
@@ -2976,6 +4949,29 @@ The predefined subtraction operators are listed below. The operators all subtrac
    ```
 
    This operator is evaluated exactly as `(E)((U)x - y)`. In other words, the operator subtracts a value from the underlying type of the enumeration, yielding a value of the enumeration.
+
+   > __Expression Tree Conversion Translation Steps__
+   >
+   > Expression tree conversion for enum subtraction uses an expansion similar to the one shown above, but with some differences to support nullable lifting and promotion of numeric underlying types.
+   >
+   > For an expression of the form `e1 - e2`, where `e1` and `e2` have type `E` which is an enum type or a nullable enum type, rewrite the expression as follows:
+   >
+   > * If `E` is a non-nullable enum type, let `U` be the underlying type of `E`. If `U` is `int`, `uint`, `long`, or `ulong`, rewrite the expression to `(U)((U)e1 - (U)e2)`. Otherwise, if `U` is `byte`, `sbyte`, `short`, or `ushort`, rewrite the expression to `(U)((int)e1 - (int)e2)`.
+   >
+   > * If `E` is a nullable type `E0?` where `E0` is an enum type, let `U` be the underlying type of `E0`. If `U` is `int`, `uint`, `long`, or `ulong`, rewrite the expression to `(U?)((U?)e1 - (U?)e2)`. Otherwise, if `U` is `byte`, `sbyte`, `short`, or `ushort`, rewrite the expression to `(U?)((int?)e1 - (int?)e2)`.
+   >
+   > For an expression of the form `e - i`, where `e` has type `E` which is an enum type or a nullable enum type, and `i` has type `I` which is an integer type, a nullable integer type, or is implicitly convertible to an integer type or a nullable integer type, rewrite the expression as follows:
+   >
+   > * If `E` is a non-nullable enum type, let `U` be the underlying type of `E`. If `U` is `int`, `uint`, `long`, or `ulong`, rewrite `e` to `(U)e` and optionally rewrite `i` to `(U)i` if an implicit conversion from `I` to `U` is defined. Otherwise, if `U` is `byte`, `sbyte`, `short`, or `ushort`, rewrite `e` to `(int)e` and rewrite `i` to `(int)(U)i` if an implicit conversion from `I` to `U` is defined, or rewrite `i` to `(int)i` otherwise. Finally, rewrite the original expression to `(E)(e - i)`, given the rewritten expressions `e` and `i`.
+   >
+   > * If `E` is a nullable type `E0?` where `E0` is an enum type, let `U` be the underlying type of `E0`. If `U` is `int`, `uint`, `long`, or `ulong`, rewrite `e` to `(U?)e` and optionally rewrite `i` to `(U?)i` if an implicit conversion from `I` to `U` or from `I?` to `U?` is defined. Otherwise, if `U` is `byte`, `sbyte`, `short`, or `ushort`, rewrite `e` to `(int?)e` and rewrite `i` to `(int?)(U)i` or `(int?)(U?)i` if an implicit conversion from `I` to `U` or from `I?` to `U?` is defined, or rewrite `i` to `(int?)i` otherwise. Finally, rewrite the original expression to `(E)(e - i)`, given the rewritten expressions `e` and `i`.
+   >
+   > Expression tree conversion then proceeds by translating the resulting expression. All conversions introduced in the preceding steps are classified as compiler-generated.
+   >
+   > Also note that all conversion and subtraction operations in the resulting expression are subject to checked arithmetic if they occur in a checked context. For example, in query expression trees this will result in the use of `SubtractChecked` and `ConvertChecked`; in generalized expression trees this will result in the use of the `Q.Flags.CheckedContext` flags.
+   >
+   > ***TODO***
+   > * See remarks on enum addition.
 
 *  Delegate removal. Every delegate type implicitly provides the following predefined operator, where `D` is the delegate type:
 
@@ -3016,6 +5012,37 @@ The predefined subtraction operators are listed below. The operators all subtrac
        }
    }
    ```
+
+   > __Expression Tree Conversion Translation Steps__
+   >
+   > Expression tree conversion for delegate removal defines `method` as the `Remove(Delegate, Delegate)` method on `System.Delegate` and introduces a cast expression to `D` on the result, which is classified as compiler-generated. For instance, the expression
+   >
+   > ```csharp
+   > f1 - f2
+   > ```
+   >
+   > where `f1` and `f2` are expressions of delegate type `Func<int>` is translated to
+   >
+   > ```csharp
+   > Expression.Convert(
+   >     Expression.Subtract(f1Expr, f2Expr, method),
+   >     typeof(Func<int>)
+   > )
+   > ```
+   >
+   > for query expression trees, and to
+   >
+   > ```csharp
+   > Q.Convert(
+   >     Q.ConvertInfo(Q.Flags.CompilerGenerated, typeof(Func<int>))
+   >     Q.Subtract(
+   >         Q.SubtractInfo(default(Q.Flags), method),
+   >         f1Expr, f2Expr
+   >     )
+   > )
+   > ```
+   >
+   > for generalized expression trees, where `f1Expr` and `f2Expr` are the result of translating `f1` and `f2` to expression trees. Note that these conversions do not introduce a cast from `Func<int>` to `Delegate`; the only introduced conversion occurs on the result.
 
 ## Shift operators
 
@@ -3076,6 +5103,70 @@ Shift operations never cause overflows and produce the same results in `checked`
 
 When the left operand of the `>>` operator is of a signed integral type, the operator performs an arithmetic shift right wherein the value of the most significant bit (the sign bit) of the operand is propagated to the high-order empty bit positions. When the left operand of the `>>` operator is of an unsigned integral type, the operator performs a logical shift right wherein high-order empty bit positions are always set to zero. To perform the opposite operation of that inferred from the operand type, explicit casts can be used. For example, if `x` is a variable of type `int`, the operation `unchecked((int)((uint)x >> y))` performs a logical shift right of `x`.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> An expression with shift operator `op`
+>
+> ```csharp
+> left op right
+> ```
+>
+> is translated into an expression tree by translating `left` to `leftExpr`, by translating `right` to `rightExpr`, and by optionally constructing an expression `method` of type `MethodInfo` representing the method implementing the operator if the operator is bound to a user-defined operator.
+>
+> Expression tree translation then proceeds as follows, where `M` is `LeftShift` if the operator is `<<`, and `RightShift` if the operator is `>>`.
+>
+> When subject to conversion to a query expression tree, if the operation is dynamically bound, an error is produced. Otherwise, it is translated into
+>
+> ```csharp
+> Expression.M(leftExpr, rightExpr, method)
+> ```
+>
+> if the operator is bound to a user-defined operator implementation, or
+>
+> ```csharp
+> Expression.M(leftExpr, rightExpr)
+> ```
+>
+> otherwise.
+>
+> When subject to conversion to a generalized expression tree it is translated into
+>
+> ```csharp
+> Q.M(info, leftExpr, rightExpr)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.MInfo(binder)
+> ```
+>
+> if the operation is dynamically bound, where `binder` is an expression of type `Microsoft.CSharp.RuntimeBinder.CallSiteBinder` representing the dynamic operation, and otherwise into
+>
+> ```csharp
+> Q.MInfo(flags, method)
+> ```
+>
+> if the operator is bound to a user-defined operator implementation, or
+>
+> ```csharp
+> Q.MInfo(flags)
+> ```
+>
+> otherwise, where `flags` is any of the following:
+>
+> * `Q.Flags.Lifted` if the operator is [lifted](#lifted-operators), or,
+> * `default(Q.Flags)` otherwise.
+>
+> Note that conversion to generalized expression trees use a `Lifted` flag to convey this information to the expression tree library. This reduces the burden on the expression tree library to infer this information using reflection.
+>
+> Also note that expression tree conversion does not include a `&` bitmask on the right operand with values `0x1F` or `0x3F`. Expression tree libraries can choose to apply this mask if desired to do so, for instance for purposes of evaluating the expression.
+>
+> ***TODO***:
+> * Evaluate options for the dynamic case:
+>   * create a specification for the construction of `binder` (can also be used to specify `dynamic` behavior outside the context of expression trees) and consider making more properties on the `Microsoft.CSharp.RuntimeBinder` library types publicly accessable so expression tree libraries can inspect this info, or,
+>   * steer away from reusing `Microsoft.CSharp` and introduce a `MInfo` factory overload for dynamic binding (e.g. a `(Q.DynamicFlags flags, Type context, A leftArgumentInfo, A rightArgumentInfo)` overload, where `A` is built through factory invocations as well).
+
 ## Relational and type-testing operators
 
 The `==`, `!=`, `<`, `>`, `<=`, `>=`, `is` and `as` operators are called the relational and type-testing operators.
@@ -3117,6 +5208,69 @@ The predefined comparison operators are described in the following sections. All
 | `x > y`       | `true` if `x` is greater than `y`, `false` otherwise             | 
 | `x <= y`      | `true` if `x` is less than or equal to `y`, `false` otherwise    | 
 | `x >= y`      | `true` if `x` is greater than or equal to `y`, `false` otherwise | 
+
+> __Expression Tree Conversion Translation Steps__
+>
+> An expression with comparison operator `op`
+>
+> ```csharp
+> left op right
+> ```
+>
+> is translated into an expression tree by translating `left` to `leftExpr`, by translating `right` to `rightExpr`, and by optionally constructing an expression `method` of type `MethodInfo` representing the method implementing the operator if the operator is bound to a user-defined operator.
+>
+> Expression tree translation then proceeds as follows, where `M` is `Equal` if the operator is `==`, `NotEqual` if the operator is `!=`, `LessThan` if the operator is `<`, `LessThanOrEqual` if the operator is `<=`, `GreaterThan` if the operator is `>`, and `GreaterThanOrEqual` if the operator is `>=`.
+>
+> When subject to conversion to a query expression tree, if the operation is dynamically bound, an error is produced. Otherwise, it is translated into
+>
+> ```csharp
+> Expression.M(leftExpr, rightExpr, liftToNull, method)
+> ```
+>
+> if the operator is bound to a user-defined operator implementation, where `liftToNull` is an expression of type `bool` with value `true` if the operation is [lifted](#lifted-operators) and the return type of the user-defined operator is not a nullable type, and with value `false` otherwise, or,
+>
+> ```csharp
+> Expression.M(leftExpr, rightExpr)
+> ```
+>
+> otherwise.
+>
+> When subject to conversion to a generalized expression tree it is translated into
+>
+> ```csharp
+> Q.M(info, leftExpr, rightExpr)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.MInfo(binder)
+> ```
+>
+> if the operation is dynamically bound, where `binder` is an expression of type `Microsoft.CSharp.RuntimeBinder.CallSiteBinder` representing the dynamic operation, and otherwise into
+>
+> ```csharp
+> Q.MInfo(flags, method)
+> ```
+>
+> if the operator is bound to a user-defined operator implementation, or
+>
+> ```csharp
+> Q.MInfo(flags)
+> ```
+>
+> otherwise, where `flags` is the bitwise `|` combination of any of the following:
+>
+> * `Q.Flags.Lifted` if the operator is [lifted](#lifted-operators), and,
+> * `Q.Flags.LiftedToNull` if the operator is [lifted](#lifted-operators) and the return type of the user-defined operator is not a nullable type, or,
+> * `default(Q.Flags)` if no flags apply.
+>
+> Note that conversion to generalized expression trees use `Lifted` and `LiftedToNull` flags to convey this information to the expression tree library. This reduces the burden on the expression tree library to infer this information using reflection.
+>
+> ***TODO***:
+> * Evaluate options for the dynamic case:
+>   * create a specification for the construction of `binder` (can also be used to specify `dynamic` behavior outside the context of expression trees) and consider making more properties on the `Microsoft.CSharp.RuntimeBinder` library types publicly accessable so expression tree libraries can inspect this info, or,
+>   * steer away from reusing `Microsoft.CSharp` and introduce a `MInfo` factory overload for dynamic binding (e.g. a `(Q.DynamicFlags flags, Type context, A leftArgumentInfo, A rightArgumentInfo)` overload, where `A` is built through factory invocations as well).
 
 ### Integer comparison operators
 
@@ -3206,6 +5360,10 @@ bool operator >=(decimal x, decimal y);
 
 Each of these operators compares the numeric values of the two decimal operands and returns a `bool` value that indicates whether the particular relation is `true` or `false`. Each decimal comparison is equivalent to using the corresponding relational or equality operator of type `System.Decimal`.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> For purposes of expression tree conversion of decimal comparison, `method` is defined as the static method defined on `System.Decimal` implementing the operator.
+
 ### Boolean equality operators
 
 The predefined boolean equality operators are:
@@ -3231,6 +5389,23 @@ bool operator >=(E x, E y);
 ```
 
 The result of evaluating `x op y`, where `x` and `y` are expressions of an enumeration type `E` with an underlying type `U`, and `op` is one of the comparison operators, is exactly the same as evaluating `((U)x) op ((U)y)`. In other words, the enumeration type comparison operators simply compare the underlying integral values of the two operands.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> Expression tree conversion for enum comparison uses an expansion similar to the one shown above, but with some differences to support nullable lifting and promotion of numeric underlying types.
+>
+> For an expression of the form `e1 op e2`, where `e1` and `e2` have type `E` which is an enum type or a nullable enum type, rewrite the expression as follows:
+>
+> * If `E` is a non-nullable enum type, let `U` be the underlying type of `E`. If `U` is `int`, `uint`, `long`, or `ulong`, rewrite the expression to `(U)e1 op (U)e2`. Otherwise, if `U` is `byte`, `sbyte`, `short`, or `ushort`, rewrite the expression to `(int)e1 op (int)e2`.
+>
+> * If `E` is a nullable type `E0?` where `E0` is an enum type, let `U` be the underlying type of `E0`. If `U` is `int`, `uint`, `long`, or `ulong`, rewrite the expression to `(U?)e1 op (U?)e2`. Otherwise, if `U` is `byte`, `sbyte`, `short`, or `ushort`, rewrite the expression to `(int?)e1 op (int?)e2`.
+>
+> Expression tree conversion then proceeds by translating the resulting expression. All conversions introduced in the preceding steps are classified as compiler-generated.
+>
+> Also note that all conversion operations in the resulting expression are subject to checked arithmetic if they occur in a checked context. For example, in query expression trees this will result in the use of `ConvertChecked`; in generalized expression trees this will result in the use of the `Q.Flags.CheckedContext` flags.
+>
+> ***TODO***
+> * See remarks on enum addition.
 
 ### Reference type equality operators
 
@@ -3308,6 +5483,13 @@ class Test
 ```
 outputs `False` because the casts create references to two separate instances of boxed `int` values.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> For purposes of expression tree conversion of object reference equality operators, the `Equal` and `NotEqual` factory methods are used, rather than `ReferenceEqual` and `ReferenceNotEqual` methods which may be defined (as is the case for query expression trees).
+>
+> ***TODO***
+> * Evaluate whether generalized expression trees should make reference equality explicit operators explicit, either through the use of dedicated factory method names, or by using a flag.
+
 ### String equality operators
 
 The predefined string equality operators are:
@@ -3322,6 +5504,10 @@ Two `string` values are considered equal when one of the following is true:
 *  Both values are non-null references to string instances that have identical lengths and identical characters in each character position.
 
 The string equality operators compare string values rather than string references. When two separate string instances contain the exact same sequence of characters, the values of the strings are equal, but the references are different. As described in [Reference type equality operators](expressions.md#reference-type-equality-operators), the reference type equality operators can be used to compare string references instead of string values.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> For purposes of expression tree conversion of string equality, `method` is defined as the static method defined on `System.String` implementing the operator.
 
 ### Delegate equality operators
 
@@ -3344,6 +5530,10 @@ The following rules govern the equality of invocation list entries:
 *  If two invocation list entries both refer to the same non-static method on the same target object (as defined by the reference equality operators) then the entries are equal.
 *  Invocation list entries produced from evaluation of semantically identical *anonymous_method_expression*s or *lambda_expression*s with the same (possibly empty) set of captured outer variable instances are permitted (but not required) to be equal.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> For purposes of expression tree conversion of delegate equality, `method` is defined as the static method defined on `System.Delegate` implementing the operator. Note that no conversions are introduced.
+
 ### Equality operators and null
 
 The `==` and `!=` operators permit one operand to be a value of a nullable type and the other to be the `null` literal, even if no predefined or user-defined operator (in unlifted or lifted form) exists for the operation.
@@ -3356,6 +5546,10 @@ x != null
 null != x
 ```
 where `x` is an expression of a nullable type, if operator overload resolution ([Binary operator overload resolution](expressions.md#binary-operator-overload-resolution)) fails to find an applicable operator, the result is instead computed from the `HasValue` property of `x`. Specifically, the first two forms are translated into `!x.HasValue`, and last two forms are translated into `x.HasValue`.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> For purposes of expression tree conversion of equality operators on nullable types, an `Equal` or `NotEqual` factory is used. That is, no conversion to `HasValue` member access is performed.
 
 ### The is operator
 
@@ -3374,6 +5568,40 @@ The `is` operator is used to dynamically check if the run-time type of an object
    * Otherwise, the result is false.
 
 Note that user defined conversions, are not considered by the `is` operator.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> An `is` expression
+>
+> ```csharp
+> expression is T
+> ```
+>
+> is translated into an expression tree by first translating `expression` to `expr`, and by constructing an expression `type` of type `Type` from `typeof(T)` if `T` is not `dynamic` or `typeof(object)` if `T` is `dynamic`.
+>
+> Expression tree translation then proceeds as follows.
+>
+> When subject to conversion to a query expression tree, it is translated into
+>
+> ```csharp
+> Expression.TypeIs(expr, type)
+> ```
+>
+> Note that `expression` is allowed to be of type `dynamic`, causing the translated expression to be equivalent to `expression is object`.
+>
+> When subject to conversion to a generalized expression tree, it is translated into
+>
+> ```csharp
+> Q.TypeIs(info, expr)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.TypeIsInfo(default(Q.Flags), type)
+> ```
+>
+> where the first flags parameter is reserved for future use.
 
 ### The as operator
 
@@ -3418,6 +5646,38 @@ class X
 ```
 the type parameter `T` of `G` is known to be a reference type, because it has the class constraint. The type parameter `U` of `H` is not however; hence the use of the `as` operator in `H` is disallowed.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> An `as` expression
+>
+> ```csharp
+> expression as T
+> ```
+>
+> is translated into an expression tree by first translating `expression` to `expr`, and by constructing an expression `type` of type `Type` from `typeof(T)` if `T` is not `dynamic` or `typeof(object)` if `T` is `dynamic`.
+>
+> Expression tree translation then proceeds as follows.
+>
+> When subject to conversion to a query expression tree, and `T` is `dynamic`, an error is produced. Otherwise, it is translated into
+>
+> ```csharp
+> Expression.TypeAs(expr, type)
+> ```
+>
+> When subject to conversion to a generalized expression tree, it is translated into
+>
+> ```csharp
+> Q.TypeAs(info, expr)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.TypeAsInfo(default(Q.Flags), type)
+> ```
+>
+> where the first flags parameter is reserved for future use.
+
 ## Logical operators
 
 The `&`, `^`, and `|` operators are called the logical operators.
@@ -3442,6 +5702,68 @@ inclusive_or_expression
 If an operand of a logical operator has the compile-time type `dynamic`, then the expression is dynamically bound ([Dynamic binding](expressions.md#dynamic-binding)). In this case the compile-time type of the expression is `dynamic`, and the resolution described below will take place at run-time using the run-time type of those operands that have the compile-time type `dynamic`.
 
 For an operation of the form `x op y`, where `op` is one of the logical operators, overload resolution ([Binary operator overload resolution](expressions.md#binary-operator-overload-resolution)) is applied to select a specific operator implementation. The operands are converted to the parameter types of the selected operator, and the type of the result is the return type of the operator.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> An expression with logical operator `op`
+>
+> ```csharp
+> left op right
+> ```
+>
+> is translated into an expression tree by translating `left` to `leftExpr`, by translating `right` to `rightExpr`, and by optionally constructing an expression `method` of type `MethodInfo` representing the method implementing the operator if the operator is bound to a user-defined operator.
+>
+> Expression tree translation then proceeds as follows, where `M` is `And` if the operator is `+`, `Or` if the operator is `|`, and `ExclusiveOr` if the operator is `^`.
+>
+> When subject to conversion to a query expression tree, if the operation is dynamically bound, an error is produced. Otherwise, it is translated into
+>
+> ```csharp
+> Expression.M(leftExpr, rightExpr, method)
+> ```
+>
+> if the operator is bound to a user-defined operator implementation, or
+>
+> ```csharp
+> Expression.M(leftExpr, rightExpr)
+> ```
+>
+> otherwise.
+>
+> When subject to conversion to a generalized expression tree it is translated into
+>
+> ```csharp
+> Q.M(info, leftExpr, rightExpr)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.MInfo(binder)
+> ```
+>
+> if the operation is dynamically bound, where `binder` is an expression of type `Microsoft.CSharp.RuntimeBinder.CallSiteBinder` representing the dynamic operation, and otherwise into
+>
+> ```csharp
+> Q.MInfo(flags, method)
+> ```
+>
+> if the operator is bound to a user-defined operator implementation, or
+>
+> ```csharp
+> Q.MInfo(flags)
+> ```
+>
+> otherwise, where `flags` is any of the following:
+>
+> * `Q.Flags.Lifted` if the operator is [lifted](#lifted-operators), or,
+> * `default(Q.Flags)` otherwise.
+>
+> Note that conversion to generalized expression trees use a `Lifted` flag to convey this information to the expression tree library. This reduces the burden on the expression tree library to infer this information using reflection.
+>
+> ***TODO***:
+> * Evaluate options for the dynamic case:
+>   * create a specification for the construction of `binder` (can also be used to specify `dynamic` behavior outside the context of expression trees) and consider making more properties on the `Microsoft.CSharp.RuntimeBinder` library types publicly accessable so expression tree libraries can inspect this info, or,
+>   * steer away from reusing `Microsoft.CSharp` and introduce a `MInfo` factory overload for dynamic binding (e.g. a `(Q.DynamicFlags flags, Type context, A leftArgumentInfo, A rightArgumentInfo)` overload, where `A` is built through factory invocations as well).
 
 The predefined logical operators are described in the following sections.
 
@@ -3548,6 +5870,70 @@ An operation of the form `x && y` or `x || y` is processed by applying overload 
 
 It is not possible to directly overload the conditional logical operators. However, because the conditional logical operators are evaluated in terms of the regular logical operators, overloads of the regular logical operators are, with certain restrictions, also considered overloads of the conditional logical operators. This is described further in [User-defined conditional logical operators](expressions.md#user-defined-conditional-logical-operators).
 
+> __Expression Tree Conversion Translation Steps__
+>
+> An expression with conditional logical operator `op`
+>
+> ```csharp
+> left op right
+> ```
+>
+> is translated into an expression tree by translating `left` to `leftExpr`, by translating `right` to `rightExpr`, and by optionally constructing an expression `method` of type `MethodInfo` representing the method implementing the corresponding logical `&` or `|` operator if the operator is bound to a user-defined operator.
+>
+> Expression tree translation then proceeds as follows, where `M` is `AndAlso` if the operator is `&&`, and `OrElse` if the operator is `||`.
+>
+> When subject to conversion to a query expression tree, if the operation is dynamically bound, an error is produced. Otherwise, it is translated into
+>
+> ```csharp
+> Expression.M(leftExpr, rightExpr, method)
+> ```
+>
+> if the operator is bound to a user-defined operator implementation, or
+>
+> ```csharp
+> Expression.M(leftExpr, rightExpr)
+> ```
+>
+> otherwise.
+>
+> When subject to conversion to a generalized expression tree it is translated into
+>
+> ```csharp
+> Q.M(info, leftExpr, rightExpr)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.MInfo(binder)
+> ```
+>
+> if the operation is dynamically bound, where `binder` is an expression of type `Microsoft.CSharp.RuntimeBinder.CallSiteBinder` representing the dynamic operation, and otherwise into
+>
+> ```csharp
+> Q.MInfo(flags, method, truthMethod)
+> ```
+>
+> if the operator is bound to a user-defined operator implementation, where `truthMethod` is an expression of type `MethodInfo` representing the method implementing the corresponding `true` or `false` operator, or
+>
+> ```csharp
+> Q.MInfo(flags)
+> ```
+>
+> otherwise, where `flags` is any of the following:
+>
+> * `Q.Flags.Lifted` if the operator is [lifted](#lifted-operators), or,
+> * `default(Q.Flags)` otherwise.
+>
+> Note that conversion to generalized expression trees use a `Lifted` flag to convey this information to the expression tree library. This reduces the burden on the expression tree library to infer this information using reflection.
+>
+> Also note that conversion to generalized expression trees retains information about the bound `true` or `false` method for user-defined conditional logical operators. This reduces the runtime overhead in expression tree libraries to infer this operator from the given `&` or `|` method.
+>
+> ***TODO***:
+> * Evaluate options for the dynamic case:
+>   * create a specification for the construction of `binder` (can also be used to specify `dynamic` behavior outside the context of expression trees) and consider making more properties on the `Microsoft.CSharp.RuntimeBinder` library types publicly accessable so expression tree libraries can inspect this info, or,
+>   * steer away from reusing `Microsoft.CSharp` and introduce a `MInfo` factory overload for dynamic binding (e.g. a `(Q.DynamicFlags flags, Type context, A leftArgumentInfo, A rightArgumentInfo)` overload, where `A` is built through factory invocations as well).
+
 ### Boolean conditional logical operators
 
 When the operands of `&&` or `||` are of type `bool`, or when the operands are of types that do not define an applicable `operator &` or `operator |`, but do define implicit conversions to `bool`, the operation is processed as follows:
@@ -3595,6 +5981,165 @@ The type of the expression `a ?? b` depends on which implicit conversions are av
 *  Otherwise, if `b` has a type `B` and an implicit conversion exists from `a` to `B`, the result type is `B`. At run-time, `a` is first evaluated. If `a` is not null, `a` is unwrapped to type `A0` (if `A` exists and is nullable) and converted to type `B`, and this becomes the result. Otherwise, `b` is evaluated and becomes the result.
 *  Otherwise, `a` and `b` are incompatible, and a compile-time error occurs.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> A null coalescing `??` expression
+>
+> ```csharp
+> a ?? b
+> ```
+>
+> is translated into an expression tree by first pre-processing the expression into
+>
+> ```csharp
+> a ?? b0
+> ```
+>
+> where `b0` is `(T)(b)` if evaluation involves an implicit conversion exists from `b` to `T` where `T` and either be `A` or `A0`, and `b` otherwise. Note that this pre-processing step may introduce a cast expression which will be classified as compiler-generated.
+>
+> Expression tree translation then proceeds as follows, by first translating `a` to `aExpr` and by translating `b0` to `bExpr`.
+>
+> When subject to conversion to a query expression tree, it is translated into
+>
+> ```csharp
+> Expression.Coalesce(aExpr, bExpr)
+> ```
+>
+> unless evaluation involves a conversion of `a` from `A0` to `B`, resulting in translation into
+>
+> ```csharp
+> Expression.Coalesce(aExpr, bExpr, leftConversion)
+> ```
+>
+> where `leftConversion` is constructed as follows
+>
+> ```csharp
+> Expression.Lambda(Expression.Convert(p, typeof(B)), p)
+> ```
+>
+> where `p` is a compiler-generated local variable defined as
+>
+> ```csharp
+> var p = Expression.Parameter(typeof(A0), "p");
+> ```
+>
+> Note that these translation steps do not rely on the translation of a lambda expression `(A0 p) => (B)p` which would be simpler. The current implementation of the C# compiler generates different `Expression` factory invocations for translation of arbitrary lambda expressions versus translation of the specific lambda expression used for a coalesce expression.
+>
+> When subject to conversion to a generalized expression tree, it is translated into
+>
+> ```csharp
+> Q.Coalesce(info, aExpr, bExpr)
+> ```
+>
+> where `bExpr` may be a `Convert` node with the `Q.Flags.CompilerGenerated` flag set, and where `info` is
+>
+> ```csharp
+> Q.CoalesceInfo(default(Q.Flags), type)
+> ```
+>
+> unless evaluation involves a conversion from `a` from `A0` to `B`, causing `info` to be
+>
+> ```csharp
+> Q.CoalesceInfo(
+>     default(Q.Flags),
+>     type,
+>     Q.ConvertInfo(Q.Flags.CompilerGenerated, typeof(B))
+> )
+> ```
+>
+> where the first flags parameter is reserved for future use, and `type` is an expression of type `Type` representing the type of the coalesce expression.
+>
+> Note that generalized expression trees leverage the `ConvertInfo` factory to avoid having to construct a `Lambda` expression tree to represent the conversion of `a`.
+>
+> ***TODO*** Decide on when to pass a `type` to an `Info` factory. We could pass it always after the `flags` (even for nodes such as `Constant`) to reduce the need for type inferencing logic in expression tree libraries. We could also do it only when absolutely needed (i.e. no way to infer within a library, or if ambiguous), at the expense of expression tree libraries having to do more work. Either way, consistency seems desirable. If we specify a type, we could also consider whether we want to offer a way to differentiate `object` from `dynamic`, e.g. using `Q.TypeInfo(type, dynamicInfo)` where `DynamicInfo` follows the convention of `DynamicAttribute.TransformFlags`.
+
+## Logical operators
+
+The `&`, `^`, and `|` operators are called the logical operators.
+
+```antlr
+and_expression
+    : equality_expression
+    | and_expression '&' equality_expression
+    ;
+
+exclusive_or_expression
+    : and_expression
+    | exclusive_or_expression '^' and_expression
+    ;
+
+inclusive_or_expression
+    : exclusive_or_expression
+    | inclusive_or_expression '|' exclusive_or_expression
+    ;
+```
+
+If an operand of a logical operator has the compile-time type `dynamic`, then the expression is dynamically bound ([Dynamic binding](expressions.md#dynamic-binding)). In this case the compile-time type of the expression is `dynamic`, and the resolution described below will take place at run-time using the run-time type of those operands that have the compile-time type `dynamic`.
+
+For an operation of the form `x op y`, where `op` is one of the logical operators, overload resolution ([Binary operator overload resolution](expressions.md#binary-operator-overload-resolution)) is applied to select a specific operator implementation. The operands are converted to the parameter types of the selected operator, and the type of the result is the return type of the operator.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> An expression with logical operator `op`
+>
+> ```csharp
+> left op right
+> ```
+>
+> is translated into an expression tree by translating `left` to `leftExpr`, by translating `right` to `rightExpr`, and by optionally constructing an expression `method` of type `MethodInfo` representing the method implementing the operator if the operator is bound to a user-defined operator.
+>
+> Expression tree translation then proceeds as follows, where `M` is `And` if the operator is `+`, `Or` if the operator is `|`, and `ExclusiveOr` if the operator is `^`.
+>
+> When subject to conversion to a query expression tree, if the operation is dynamically bound, an error is produced. Otherwise, it is translated into
+>
+> ```csharp
+> Expression.M(leftExpr, rightExpr, method)
+> ```
+>
+> if the operator is bound to a user-defined operator implementation, or
+>
+> ```csharp
+> Expression.M(leftExpr, rightExpr)
+> ```
+>
+> otherwise.
+>
+> When subject to conversion to a generalized expression tree it is translated into
+>
+> ```csharp
+> Q.M(info, leftExpr, rightExpr)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.MInfo(binder)
+> ```
+>
+> if the operation is dynamically bound, where `binder` is an expression of type `Microsoft.CSharp.RuntimeBinder.CallSiteBinder` representing the dynamic operation, and otherwise into
+>
+> ```csharp
+> Q.MInfo(flags, method)
+> ```
+>
+> if the operator is bound to a user-defined operator implementation, or
+>
+> ```csharp
+> Q.MInfo(flags)
+> ```
+>
+> otherwise, where `flags` is any of the following:
+>
+> * `Q.Flags.Lifted` if the operator is [lifted](#lifted-operators), or,
+> * `default(Q.Flags)` otherwise.
+>
+> Note that conversion to generalized expression trees use a `Lifted` flag to convey this information to the expression tree library. This reduces the burden on the expression tree library to infer this information using reflection.
+>
+> ***TODO***:
+> * Evaluate options for the dynamic case:
+>   * create a specification for the construction of `binder` (can also be used to specify `dynamic` behavior outside the context of expression trees) and consider making more properties on the `Microsoft.CSharp.RuntimeBinder` library types publicly accessable so expression tree libraries can inspect this info, or,
+>   * steer away from reusing `Microsoft.CSharp` and introduce a `Pre*Info` factory overload for dynamic binding (e.g. a `(Q.DynamicFlags flags, Type context, A leftArgumentInfo, A rightArgumentInfo)` overload, where `A` is built through factory invocations as well).
+
 ## Conditional operator
 
 The `?:` operator is called the conditional operator. It is at times also called the ternary operator.
@@ -3628,6 +6173,52 @@ The run-time processing of a conditional expression of the form `b ? x : y` cons
    * Otherwise, the `operator true` defined by the type of `b` is invoked to produce a `bool` value.
 *  If the `bool` value produced by the step above is `true`, then `x` is evaluated and converted to the type of the conditional expression, and this becomes the result of the conditional expression.
 *  Otherwise, `y` is evaluated and converted to the type of the conditional expression, and this becomes the result of the conditional expression.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> A conditional expression
+>
+> ```csharp
+> b ? x : y
+> ```
+>
+> is translated into an expression tree by first performing the following pre-processing steps given the types `X` and `Y` as defined earlier:
+>
+> * if an implicit conversion of `b` to `bool` is required, translate `b` to `(bool)b`,
+> * if an implicit conversion exists from `X` to `Y`, but not from `Y` to `X`, translate `x` to `(Y)x`, and,
+> * if an implicit conversion exists from `Y` to `X`, but not from `X` to `Y`, translate `y` to `(X)y`.
+>
+> This pre-processing step effectively makes implicit conversions explicit. Introduced casts are classified as ***compiler-generated*** and their translation to generalized expression trees will include a `Q.Flags.CompilerGenerated` flag.
+>
+> After applying this pre-processing step, which may zero or more [cast expressions](#cast-expression), translation to expression trees proceeds by
+>
+> * translating the result of pre-processing `b` to an expression tree `bExpr`,
+> * translating the result of pre-processing `x` to an expression tree `xExpr`,
+> * translating the result of pre-processing `y` to an expression tree `yExpr`, and
+>
+> by proceeding as follows.
+>
+> When subject to conversion to a query expression tree, continue by translating into
+>
+> ```csharp
+> Expression.Condition(bExpr, xExpr, yExpr)
+> ```
+>
+> When subject to conversion to a generalized expression tree, continue by translating into
+>
+> ```csharp
+> Q.Condition(info, bExpr, xExpr, yExpr)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.ConditionInfo(default(Q.Flags))
+> ```
+>
+> where the flags parameter is reserved for future use.
+>
+> Note that the expression tree library can infer the type of the expression from either `xExpr` or `yExpr` due to insertion of implicit conversions around `x` or `y`. Also note that any such conversions can be determined to be compiler-generated by checking the `Q.Flags.CompilerGenerated` flag that was passed to the `Q.Convert` factory method invocations.
 
 ## Anonymous function expressions
 
@@ -3723,7 +6314,334 @@ The behavior of *lambda_expression*s and *anonymous_method_expression*s is the s
 *  *anonymous_method_expression*s permit the parameter list to be omitted entirely, yielding convertibility to delegate types of any list of value parameters.
 *  *lambda_expression*s permit parameter types to be omitted and inferred whereas *anonymous_method_expression*s require parameter types to be explicitly stated.
 *  The body of a *lambda_expression* can be an expression or a statement block whereas the body of an *anonymous_method_expression* must be a statement block.
-*  Only *lambda_expression*s have conversions to compatible expression tree types ([Expression tree types](types.md#expression-tree-types)).
+*  Only *lambda_expression*s have conversions to compatible query expression tree types; *anonymous_method_expression*s can only be converted to generalized expression tree types ([Expression tree types](types.md#expression-tree-types)).
+
+> __Expression Tree Conversion Translation Steps__
+>
+> Conversion of anonymous function expressions to expression trees first infers the compatible delegate type `D` or expression type `E<D>` from the context in which the anonymous function occurs using the rules of anonymous function conversion ([Anonymous function conversions](conversions.md#anonymous-function-conversions)). If the resulting type is an expression type `E<D>`, the anonymous function is ***quoted***.
+>
+> When converting to a generalized expression tree, `Q` is used to refer to the expression tree builder type of expression type `E<D>`, if the anonymous function expression is converted to `E<D>`. Otherwise, `Q` refers to the expression tree builder type associated with the expression tree conversion of the closest parent anonymous function expression.
+>
+> Conversion of an *anonymous_method_expression* to a query expression tree is not supported and results in a compile-time error.
+>
+> Conversion of an *anonymous_method_expression* to a generalized expression tree is based on rewriting the *anonymous_method_expression* to a *lambda_expression* using the following rules. Given an expression of the form:
+>
+> ```antlr
+> anonymous_method_expression
+>     : 'delegate' explicit_anonymous_function_signature? block
+>     ;
+> ```
+>
+> If the *explicit_anonymous_function_signature* is missing, construct an *explicit_anonymous_function_signature* by inferring parameter types `P_1` to `P_N`, and optional *anonymous_function_parameter_modifier*s `M_1` to `M_N` from the parameter types on delegate type `D`, where `N` is the number of parameters. Then construct an *explicit_anonymous_function_signature* of the form:
+>
+> ```csharp
+> (M_1 P_1 p1, ..., M_N P_N pN)
+> ```
+>
+> where `p1` to `pN` are compiler-generated identifiers that do not conflict with any variables referenced in the *block* of the anonymous method expression. Each of the introduced parameters is classified as compiler-generated.
+>
+> Using the *explicit_anonymous_function_signature*, possibly constructed using the steps above, construct a *lambda_expression* as follows:
+>
+> ```antlr
+> explicit_anonymous_function_signature '=>' block
+> ```
+>
+> An example will make this rewrite clear. Consider the following anonymous method expression
+>
+> ```csharp
+> delegate { return 42; }
+> ```
+>
+> being converted to a `Func<string, bool, int>` delegate type. The rewrite rule transforms this to a lambda expression of the following form:
+>
+> ```csharp
+> (string p0, bool p1) => { return 42; }
+> ```
+>
+> Expression tree conversion then proceeds by converting the resulting *lambda_expression*.
+>
+> Conversion of a *lambda_expression* to an expression tree first rewrites an implicitly typed parameter list of the form
+>
+> ```antlr
+> implicit_anonymous_function_signature
+>     : '(' implicit_anonymous_function_parameter_list? ')'
+>     | implicit_anonymous_function_parameter
+>     ;
+> ```
+>
+> by first eliminating the case of a single *implicit_anonymous_function_parameter* without surrounding `(` and `)` tokens by rewriting it to an *implicit_anonymous_function_parameter_list* of length one, containing the single parameter.
+>
+> If an *implicit_anonymous_function_parameter_list* is present, rewrite it to an *explicit_anonymous_function_parameter_list* by inferring the parameter type `P_i` for each *implicit_anonymous_function_parameter* from the type of the `i`th parameter on delegate type `D` in order to construct an *explicit_anonymous_function_parameter* of the form:
+>
+> ```csharp
+> P_i identifier
+> ```
+>
+> where `identifier` is obtained from the original *implicit_anonymous_function_parameter*. An *explicit_anonymous_function_parameter_list* is then constructed from the sequence of *explicit_anonymous_function_parameter*s, and the *implicit_anonymous_function_parameter_list* in the *lambda_expression* is replaced by the newly constructed parameter list.
+>
+> An example will make this rewrite clear. Consider the following lambda expression
+>
+> ```csharp
+> (x, y) => x + y
+> ```
+>
+> being converted to a `Func<long, int, long>` delegate type. The rewrite rule transforms this to a lambda expression of the following form:
+>
+> ```csharp
+> (long x, int x) => x + y
+> ```
+>
+> After applying all the rewrite steps above, conversion to expression trees is reduced to *lambda_expression*s of the following form:
+>
+> ```antlr
+> lambda_expression
+>     : '(' explicit_anonymous_function_parameter_list? ')' '=>' anonymous_function_body
+>     ;
+> 
+> explicit_anonymous_function_parameter_list
+>     : explicit_anonymous_function_parameter (',' explicit_anonymous_function_parameter)*
+>     ;
+> 
+> explicit_anonymous_function_parameter
+>     : anonymous_function_parameter_modifier? type identifier
+>     ;
+> 
+> anonymous_function_parameter_modifier
+>     : 'ref'
+>     | 'out'
+>     ;
+> 
+> anonymous_function_body
+>     : expression
+>     | block
+>     ;
+> ```
+>
+> Expression tree conversion proceeds by applying the expression tree conversion steps in [Value parameters](variables.md#value-parameters) or [Reference parameters](variables.md#reference-parameters) to each *explicit_anonymous_function_parameter*. This results in the introduction of a local variable `t` for each parameter converted to an expression tree. We subsequently refer to these variables as `parameterVar_i` (where `1 < i < N`), each of these corresponding to the parameter with index `i`.
+>
+> Next, an expression `parameterList` is constructed from the parameter expressions `parameterVar_i` (where `1 < i < N`). When converted to a query expression tree, an array is constructed:
+>
+> ```csharp
+> new ParameterExpression[] { parameterVar_1, ..., parameterVar_N }
+> ```
+>
+> If `N` is `0`, implementations have the freedom to use an expression other than `new ParameterExpression[] {}` to construct an empty array instance that may not be be unique. An example is using `Array.Empty<ParameterExpression>()` to use a shared empty array instance.
+>
+> When converted to a generalized expression tree, `parameterList` is constructed as follows:
+>
+> ```csharp
+> Q.ParameterList(info, parameterVar_1, ..., parameterVar_N)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.ParameterListInfo(default(Q.Flags))
+> ```
+>
+> where the first parameter is reserved for future use. Note that the `ParameterList` factory method can have optimized overloads for low values of `N` in addition to providing a `params` overload.
+>
+> Next, the *anonymous_function_body* is converted to an expression tree `bodyExpr`, where each use site of the `i`th parameter is translated using the compiler-generated local variable `parameterVar_i` (see [Value parameters](variables.md#value-parameters) and [Reference parameters](variables.md#reference-parameters)).
+>
+> Note that query expression trees do not support statement blocks for anonymous function bodies. That is, no expression tree conversion rules exist for statements.
+>
+> Next, an expression tree node `lambdaExpr` is constructed for the anonymous function expression using the `parameterList` and `bodyExpr` expressions, and using the delegate type `D`.
+>
+> When converted to a query expression tree, and an `async` modifier is specified on the lambda expression, a compile-time error occurs. Otherwise, it is translated into
+>
+> ```csharp
+> Expression.Lambda<D>(bodyExpr, parameterList)
+> ```
+>
+> where `D` is the delegate type.
+>
+> When converted to a generalized query expression, it is translated into
+>
+> ```csharp
+> Q.Lambda<D>(info, parameterList, bodyExpr)
+> ```
+>
+> where `D` is the delegate type, and where `info` is
+>
+> ```csharp
+> Q.AsyncLambdaInfo(flags)
+> ```
+>
+> if the lambda expression has an `async` modifier and has a `void`, `Task`, or `Task<T>` return type, or
+>
+> ```csharp
+> Q.AsyncLambdaInfo(flags, builderType)
+> ```
+>
+> if the lambda expression has an `async` modifier and has a return type different from `void`, `Task`, or `Task<T>`, where `builderType` is an expression of type `Type` representing the builder type associated with the return type, or
+>
+> ```csharp
+> Q.LambdaInfo(flags)
+> ```
+>
+> otherwise, where `flags` is `Q.Flags.CompilerGenerated` if the anonymous function expression is compiler-generated or `default(Q.Flags)` otherwise.
+>
+> Note that the order of parameters on `Q.Lambda` differs from the order on `Expression.Lambda`. Generalized query expression trees retain the original lexical order and use separate nodes to describe variable-length lists such as parameter lists.
+>
+> Finally, if the anonymous function expression is ***quoted*** (as described at the beginning of this section) and the anonymous function expression occurs in an expression or statement that itself is converted to an expression tree, a final translation ***quotation*** step is performed. Otherwise, the result of the expression tree conversion is `lambdaExpr`, as constructed in the steps above.
+>
+> For purposes of ***quotation***, define `PQ` as the expression tree builder type of the closest parent anonymous function expression to the current anonymous function expression, if it exists. Four distinct cases exist:
+>
+> 1. `P` does not exist, and `Q` does not exist.
+>
+>    The parent anonymous function expression is converted to a query expression tree type `Expression<PD>`, where `PD` is some delegate type, and the current anonymous function expression is converted to a query expression tree type `Expression<D>`.
+>
+>    Expression tree conversion results in
+>
+>    ```csharp
+>    Expression.Quote(lambdaExpr)
+>    ```
+>
+> 2. `P` exists, and `Q` exists.
+>
+>    The parent anonymous function expression is converted to a generalized expression tree type `PQ<PD>` (with builder type `P`), where `PD` is some delegate type, and the current anonymous function expression is converted to a generalized expression tree type `CQ<D>` (with builder type `Q`).
+>
+>    Expression tree conversion results in
+>
+>    ```csharp
+>    P.Quote(info, lambdaExpr)
+>    ```
+>
+>    where `info` is
+>
+>    ```csharp
+>    P.QuoteInfo(default(P.Flags))
+>    ```
+>
+> 3. `P` exists, and `Q` does not exist.
+>
+>    The parent anonymous function expression is converted to a generalized expression tree type `PQ<PD>` (with builder type `P`), where `PD` is some delegate type, and the current anonymous function expression is converted to a query expression tree type `Expression<D>`.
+>
+>    Expression tree conversion results in
+>
+>    ```csharp
+>    P.Quote(info, lambdaExpr)
+>    ```
+>
+>    where `info` is
+>
+>    ```csharp
+>    P.QuoteInfo(default(P.Flags))
+>    ```
+>
+>    The expression tree library defining `P.Quote` can decide not to support this conversion by omitting an overload that is compatible with a `Expression<D>` argument.
+>
+> 4. `P` does not exist, and `Q` exists.
+>
+>    The parent anonymous function expression is converted to a query expression tree type `Expression<PD>`, where `PD` is some delegate type, and the current anonymous function expression is converted to a generalized expression tree type `CQ<D>` (with builder type `Q`).
+>
+>    This case results in a compile-time error.
+>
+> ***TODO***
+> * There's an issue with cases 2, 3, and 4 due to the way variables are referenced in expression trees.
+>    * The current conversion rules in the specification will result in `ParameterExpression` nodes being passed to `Q.*` factory methods, and `Q.Parameter` nodes being passed to `Expression.*` factory methods. For case 2, `P.Parameter` nodes will be passed to `Q.*` factory methods. In summary, any heterogeneous composition of expression tree types results in this type of cross-referencing.
+>    * Similar to the rules above, we likely need to augment the section on variables to introduce some form of conversions around nodes representing variables when they occur in a use site with an incompatible expression tree type. Given analogous numbering of cases, and using variable `v` and its corresponding expression tree node stored in variable `t`:
+>      2. For the heterogeneous case of `P` and `Q` being different, a use site reference to variable `v` (constructed using `P.Parameter`) is translated to `Q.Variable(t)`. The expression tree library defining `Q` has to support an overload of `Variable` compatible with an argument of the type returned by `P.Parameter` or `P.Variable`. Otherwise, for the homogeneous case, it is translated to just `t`.
+>      3. A use site reference to variable `v` (constructed using `Expression.Parameter`) is translated to `Q.Variable(t)`. The expression tree library defining `Q` has to support an overload of `Variable` compatible with a `ParameterExpression` argument.
+>      4.  A use site reference to variable `v` (constructed using `P.Parameter`) is translated to `P.ToExpression(t)`. The expression tree library defining `P` has to support a method `ToExpression` with a return type that is implicitly convertible to `Expression`.
+>   * For all of the cases described above, cross-referencing node types constructed from `Variable` and `ToExpression` factories can just wrap the given "foreign" node. Various mechanisms can be used to "bind" these nodes via top-down rewrites where a binding environment is passed from parent expression trees to child expression trees. This is explored below.
+> * Review if we can make case 4 above work, and more generally binding across heterogeneous compositions of expression tree types.
+>   * The general idea is that this could be made to work if there is a context-aware means for the nested expression tree to get converted to a parent expression tree type. The relevant context consists of the variables referenced in the nested expression tree, but declared by the parent tree.
+>   * For case 4, the closest construct we have available in `System.Linq.Expressions` is the `RuntimeVariables` node type which can be used to introduce storage locations for variables which are made accessible through `IRuntimeVariables`. This is combined with `StrongBox<T>` entries for mutable value types, so a strongly typed storage location of type `T` (in the form of a field variable) can be obtained, thus retaining the ability to pass a value by `ref` (e.g. for an instance call, a `ref` or `out` parameter binding, etc.).
+>     * The mechanism underlying `RuntimeVariables` in the expression tree lambda compiler ensures proper hoisting for the referenced variables, and proper binding of references to these variables using indexing into `IRuntimeVariables` and a proper cast (possibly involving `StrongBox<T>` and a member access to its `Value` field).
+>     * The idea could be to emit an `Expression.Call` to a static method `Q.ToExpression` given `lambdaExpr` and a `RuntimeVariables` node representing the environment, where this method on the builder type is supposed to return an `Expression`.
+>       * This is awkward to use, because of the `int`-based indexing into `IRuntimeVariables`, so we need an auxiliary map to associate indexes with the corresponding `Q.Parameter` local. That way, the implementation of `Q.ToExpression` can find all unbound parameters in `lambdaExpr` and map them to indexes in the `IRuntimeVariables` data structure, e.g. to inline access expressions if the goal is to support evaluation of the expression tree.
+>    * The general heterogenous case seems to call for a similar mechanism which boils down to:
+>      * Expression tree conversion steps keep track of variables that are referenced across expression trees of incompatible types (`P` to `Q`, `Expression` to `Q`, or `Q` to `Expression`).
+>      * If any such variables exist, the `Quote` is augmented by associating it with a binding environment.
+>    * An example for case 4 is sketched below. 
+>
+>> 4. `P` does not exist, and `Q` exists.
+>>
+>>    The parent anonymous function expression is converted to a query expression tree type `Expression<PD>`, where `PD` is some delegate type, and the current anonymous function expression is converted to a generalized expression tree type `CQ<D>` (with builder type `Q`).
+>>
+>>    ~~This case results in a compile-time error.~~
+>>
+>>    Expression tree conversion proceeds by determining the variables referenced in `lambdaExpr` which are declared in the parent expression tree. Let this set of variables be `var_j` for `1 <= j <= M`. From this, we construct a `bindings` expression of type `ParameterExpression[]`
+>>
+>>    ```csharp
+>>    new ParameterExpression[] { var_1, ..., var_M }
+>>    ```
+>>
+>>    and convert it to an expression tree `bindingsExpr`
+>>
+>>    ```csharp
+>>    Expression.Constant(bindings, typeof(ParameterExpression[]))
+>>    ```
+>>
+>>    Next, we construct an expression `environmentExpr`
+>>
+>>    ```csharp
+>>    Expression.RuntimeVariables(bindings)
+>>    ```
+>>
+>>    Finally, we translate the expression tree to
+>>
+>>    ```csharp
+>>    Expression.Call(
+>>        null,
+>>        method,
+>>        Expression.Constant(lambdaExpr),
+>>        bindingsExpr,
+>>        environmentExpr
+>>    )
+>>    ```
+>>
+>>    where `method` is an expression of type `MethodInfo` representing an overload of `Q.ToExpression` with a compatible argument list, if it exists. Otherwise, a compile-time error occurs.
+>>    
+>>    An example of a `ToExpression` method is shown below:
+>>
+>>    ```csharp
+>>    [ExpressionBuilder(typeof(Quote))]
+>>    class Quote<T> : LambdaQuote { ... }
+>>    
+>>    class LambdaQuote : Quote { ... }
+>>
+>>    class OuterVariableQuote : Quote
+>>    {
+>>        public OuterVariableQuote(ParameterExpression p) =>
+>>            Variable = p;
+>>    
+>>        public ParameterExpression Variable { get; }
+>>    }
+>>    
+>>    class Quote
+>>    {
+>>        public static Quote<T> Lambda<T>(...) { ... }
+>>
+>>        public static OuterVariableQuote Variable(ParameterExpression p) { ... }
+>>    
+>>        public static Expression ToExpression(
+>>            LambdaQuote quote,
+>>            ParameterExpression[] outerVariables,
+>>            IRuntimeVariables bindings) { ... }
+>>    }
+>>    ```
+>>    
+>>    The `ToExpression` method can translate the lambda `quote` to an expression tree while binding all occurrences of `OuterVariableQuote` by determining the index of `OuterVariableQuote.Variable` in `outerVariables` and returning an `Expression` constructed from
+>>
+>>    ```csharp
+>>    Expression.Field(
+>>        Expression.Convert(
+>>            Expression.MakeIndex(
+>>                Expression.Constant(bindings),
+>>                typeof(IRuntimeVariables).GetMethod("get_Item"),
+>>                new[] {
+>>                    Expression.Constant(Array.IndexOf(outerVariables, variable))
+>>                }
+>>            ),
+>>            typeof(StrongBox<>).MakeGenericType(variable.Type)
+>>        ),
+>>        nameof(StrongBox<object>.Value)
+>>    )
+>>    ```
+>>
+>>    This translation can be deferred by returning a reducible extension node inheriting from `Expression` whose `Reduce` method performs the steps shown above.
 
 ### Anonymous function signatures
 
@@ -3839,6 +6757,72 @@ the local variable `x` is captured by the anonymous function, and the lifetime o
 When a local variable or a value parameter is captured by an anonymous function, the local variable or parameter is no longer considered to be a fixed variable ([Fixed and moveable variables](unsafe-code.md#fixed-and-moveable-variables)), but is instead considered to be a moveable variable. Thus any `unsafe` code that takes the address of a captured outer variable must first use the `fixed` statement to fix the variable.
 
 Note that unlike an uncaptured variable, a captured local variable can be simultaneously exposed to multiple threads of execution.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> Conversion of use sites of ***captured*** outer variables to expression trees involves a transformation of
+>
+> ```csharp
+> v
+> ```
+>
+> where `v` is a captured outer variable not equal to `this`, to
+>
+> ```csharp
+> closure.v
+> ```
+>
+> where `closure` is an instance of compiler-generated class, and `v` is a field that is used as the storage location of captured outer variable `v`, thus extending its lifetime.
+>
+> Expression tree conversion proceeds by converting `closure.v` as a member access expression ([Member access](#member-access)), where `closure` is treated as a a *literal* for purposes of expression tree conversion ([Literals](#literals)). In particular, `closure` will be represented in an expression tree by using the `Constant` expression tree factory method.
+>
+> The following example illustrates these conversion rules.
+>
+> ```csharp
+> int x = 42;
+> Expression<Func<int>> f = () => x;
+> ```
+>
+> is translated to
+>
+> ```csharp
+> var t = new C();
+> t.x = 42;
+> Expression<Func<int>> f =
+>     Expression.Lambda(
+>         typeof(Func<int>),
+>         Expression.Field(
+>             Expression.Constant(t, typeof(C)),
+>             field
+>         ),
+>         new ParameterExpression[0]
+>     );
+> ```
+>
+> where `field` is an expression of type `FieldInfo` referring to the instance field `x` declared on the compiler-generated type `C`. The identifier `t` is compiler-generated and otherwise invisible.
+>
+> If the captured outer variable is `this`, the rules for [This access](#this-access) apply.
+>
+> Conversion to generalized expression trees proceeds completely analogous using the transformation steps outlined above.
+>
+> ***TODO***
+> * The mechanism of accessing a closure is very visible in expression trees and may warrant discussion in the context of generalized expression trees.
+>   * Drawbacks of the current approach include:
+>     * Variables that happen to be captured are obfuscated in `Member(Constant(closure), field)` constructions. They no longer are represented as variable expression nodes, thus taking away the WYSIWYG nature of expression trees.
+>     * The mechanism by which closures are represented is not formally described in the language specification, yet it leaks deep into expression trees (in leaf nodes in fact). This exposure and lack of formal specification of the closure mechanism results in brittleness because expression tree libraries tend to rely on ugly hacks to detect the pattern. Examples include checking for `CompilerGeneratedAttribute` or even checking type names for occurrence of `DisplayClass`.
+>     * Analysis of variables in expression trees performed by expression tree consuming libraries often fails to detect outer variables or classify them as variables. For example, this can lead to pretty printing of expressions that involves the `ToString` of some closure object.
+>     * It is not trivial to re-bind an expression tree to another environment because it involves chasing down `Constant` nodes that contain closures, often by pattern matching for `Member(Constant(...), ...)` constructions. Many implementations of expression tree consuming libraries have resorted to techniques that involve eliminating closures by virtue of partial evaluation or deferred forms thereof (sometimes referred to as funcletization).
+>   * An alternative could be to:
+>     * Let variables be variables, including for outer variables.
+>     * Augment an expression tree that accesses outer variables with an enviroment that binds variables. This could be part of the outermost conversion to an expression tree, for example by having `Q.LambdaInfo` take an `environment` parameter which itself is constructed from `Q.Environment(bindings)` where each `binding` in `bindings` is a `Q.VariableBinding(variable, expr)`. A `variable` that occurs in such a binding can be used within the expression tree, and `expr` can be defined to be opaque and implementation-specific.
+>     * This approach has a number of benefits:
+>       * Variables can easily be discovered by a visitor, not missing out on variables that come from the environment.
+>       * Outer variables are explicit immediately. One can simply create a set of all the variables that occur in the environment.
+>       * Outer variables can be rebound easily. For example, one could evaluate all of them and substitute them for `Constant` nodes, or one could wrap all of them with a funclet expression that lazily reduces them to constants every time the expression is re-evaluated (e.g. query providers often perform such a technique).
+>       * All `Member(Constant(...), ...)` nodes are gone from the corpus of the tree, and thus can't trip up analysis passes using visitors and whatnot that otherwise may have to special case these contraptions.
+>       * Multiple references to the same outer variable do not duplicate the `Member(Constant(...), ...)` pattern in all these use sites. A proper variable node is used, which is bound in the environment.
+>       * Users can choose to inline these bindings if they don't care about analyzing expression trees, e.g. if they just want to evaluate them.
+>       * Outer variables are a well-described construct in the language specification, and a one-to-one mapping onto a `Q.Environment` factory (which could be named `OuterVariables` or whatever makes most sense) is easy to describe.
 
 #### Instantiation of local variables
 
@@ -4065,6 +7049,24 @@ query_continuation
 ```
 
 A query expression begins with a `from` clause and ends with either a `select` or `group` clause. The initial `from` clause can be followed by zero or more `from`, `let`, `where`, `join` or `orderby` clauses. Each `from` clause is a generator introducing a ***range variable*** which ranges over the elements of a ***sequence***. Each `let` clause introduces a range variable representing a value computed by means of previous range variables. Each `where` clause is a filter that excludes items from the result. Each `join` clause compares specified keys of the source sequence with keys of another sequence, yielding matching pairs. Each `orderby` clause reorders items according to specified criteria.The final `select` or `group` clause specifies the shape of the result in terms of the range variables. Finally, an `into` clause can be used to "splice" queries by treating the results of one query as a generator in a subsequent query.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> For purposes of conversion to an expression tree, query expressions are first translated using the rules described in [Query expression translation](#query-expression-translation). The expression that results from this rewrite is then converted to an expression tree.
+>
+> ***TODO***
+> * Should generalized expression trees model query expressions prior to conversion to method invocations?
+>   * On the one hand, this would be consistent with our stance on avoiding lowering in order to get WYSIWYG expression trees. On the other hand, query expression translation *is* well-defined in the language specification and is not an implementation-specific lowering step.
+>   * For practical reasons, having a high-fidelity representation of the original intent can be useful. For starters, it gets rid of having to derive scopes of ranges variables by inspecting `New` or `NewAnonymous` expression nodes which map properties onto constructor parameters. This is very typical plumbing in query providers to support `let` clauses or other patterns that involve the use of *transparent identifiers* (see [Transparent identifiers](#transparent-identifiers)).
+>     * The specification on transparent identifiers combined with the rules for query expression translation actually reveals leakage of an implementation detail into expression trees due to the following remark:
+>       > An implementation of C# is permitted to use a different mechanism than anonymous types to group together multiple range variables.
+>     * Retaining the original intent in the form of query clauses would eliminate this concern altogether.
+>       * Alternatively, the mechanism could be constrained to state that *transparency* is required by the mechanism provided, and it should always be modeled as some `New` expression that offers a way to map construction arguments to expressions that be used to get these arguments back (currently a `Members` list, but that rules out the use of e.g. a dictionary and use indexer access, if anyone would choose to implement the mechanism that way). This would really just drive towards a sufficiently generalized `New` variant such as `NewTransparentIdentifier` of which `NewAnonymous` is merely a special case. If anything, it should work naturally with C# 7 tuples, which would now be a better, more efficient choice to implement transparent identifiers (and we could even consider altering query expression translation steps in generalized expression trees to use this).
+>   * Information about bound methods during query expression translation could likely still end up on the nodes representing query clauses. For example, a `let` clause node could have a reference to the `MethodInfo` for the bound `Select` method. However, pieces of the query expression translation lowering steps would sneak in no matter what, e.g. type arguments on `Select<T, R>` may reveal anonymous types originating from *transparent identifiers*. The mechanism to retain this binding information would require some bi-directional association between clauses and the corresponding translated form.
+>   * There is an obvious concern around equivalence between an expression tree containing a query expression versus an expression tree constructed from fluent patterns (such as `Queryable` extension methods).
+>     * In the former case, one would see the fine-grained nodes for clauses, while the latter case would stitch an expression tree using `Call` factory invocations from the bound methods.
+>     * Arguably, the way `Queryable` works is a very handy trick to compensate for the lack of quotation expressions (e.g. `@(from x in xs select x + 1)`) besides conversion of lambda expressions, and to dispatch to the query provider starting from the source. It's a no-starter to suggest that this natural way of formulating queryables would regress in the world of generalized expression trees. This said, generalized quotation expressions (e.g. `@(...)`) may still be worth thinking about (akin to `<@ ... @>` in F#).
+>     * It's conceivable that capturing a query expression in a WYSIWYG fashion would have to be paired with a runtime library that performs query expression translation so query providers can normalize all such expressions to method call invocations if that's the way they prefer things to be. This step would be relatively straightforward if bound methods are retained in the expression tree, likely just aggregating the list of clauses by turning clauses into method invocations, for example in a `VisitQuery` method in a visitor.
 
 ### Ambiguities in query expressions
 
@@ -4361,6 +7363,10 @@ Select(x => new { x.o.OrderID, Total = x.t })
 ```
 where `x` is a compiler generated identifier that is otherwise invisible and inaccessible.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> See remarks on [Transparent identifiers](#transparent-identifiers).
+
 The example
 ```csharp
 from c in customers
@@ -4475,6 +7481,20 @@ When a query translation injects a transparent identifier, further translation s
 *  When a member with a transparent identifier is in scope, the members of that member are in scope as well.
 *  When a transparent identifier occurs as a member declarator in an anonymous object initializer, it introduces a member with a transparent identifier.
 *  In the translation steps described above, transparent identifiers are always introduced together with anonymous types, with the intent of capturing multiple range variables as members of a single object. An implementation of C# is permitted to use a different mechanism than anonymous types to group together multiple range variables. The following translation examples assume that anonymous types are used, and show how transparent identifiers can be translated away.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> When translated to an expression tree, the compiler-generated identifier `x` becomes visible as the `string` passed to the `Parameter` factory. This identifier is implementation-specific. For example, the Microsoft C# compiler implementation generates identifiers of the form `<>h__TransparentIdentifier` followed by an integer. Expression tree libraries should not rely on the exact form of this name.
+>
+> ***TODO***
+> * For generalized expression trees:
+>   * Should we consider calling the `ParameterInfo` factory with no `string` parameter (i.e. only with a `Type` parameter), rather than leaking a compiler-generated name?
+>   * Can we rely on the `Q.Flags.CompilerGenerated` flag passed to the `ParameterInfo` factory to convey that the identifier (and the parameter itself) is compiler-generated?
+>   * Should we model a transparent identifier as a first-class parameter kind? After all, the concept of a transparent identifier is well-described in the language specification.
+>     * For example, by having a `TransparentIdentifier` factory or by using a flag that classifies a parameter/variable as such?
+>     * In fact, we already have `Variable` versus `Parameter` factories. It'd be up to the expression library to decide whether they implement all of these methods by calling a common helper, or by having a distinct implementation that preserves the classification of variables.
+> * In general, it's worrisome that the specification states the following, because this implementation detail currently leaks into expression trees (see remarks on [Query expressions](#query-expressions)):
+>   > An implementation of C# is permitted to use a different mechanism than anonymous types to group together multiple range variables.
 
 The example
 ```csharp
@@ -4737,6 +7757,40 @@ r.B.Y = 100;
 ```
 the assignments are all invalid, since `r.A` and `r.B` are not variables.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> Conversion of simple assignment expressions to query expression trees produces a compile-time error.
+>
+> When converted to a generalized expression tree, a simple assignment expression of the form
+>
+> ```csharp
+> a = b
+> ```
+>
+> proceeds by optionally rewriting the expression to
+>
+> ```csharp
+> a = (T)b
+> ```
+>
+> if the right-hand side expression `b` requires an implicit conversion to type `T` as described in the section above. The introduced cast expression is classified as compiler-generated.
+>
+> Expression tree conversion proceeds by converting the left-hand side `a` to an expression tree `aExpr`, and by converting the right-hand side `b` or `(T)b` to an expression tree `bExpr`. The resulting expressions are then combined into
+>
+> ```csharp
+> Q.Assign(info, aExpr, bExpr)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.AssignInfo(default(Q.Flags))
+> ```
+>
+> ***TODO***
+> * Review the need for `info` nodes when no additional info is needed, with an eye on future extensions (or do we evolve by adding new factory methods only?).
+> * An alternative option could be to avoid rewriting `b` to `(T)b` but parameterize `AssignInfo` on a `ConvertInfo` describing the conversion applied to the right-hand side. This gets more tricky for compound assignment which may involve a conversion applied to the left-hand side as well (but we could have two such converts if needed).
+
 ### Compound assignment
 
 If the left operand of a compound assignment is of the form `E.P` or `E[Ei]` where `E` has the compile-time type `dynamic`, then the assignment is dynamically bound ([Dynamic binding](expressions.md#dynamic-binding)). In this case the compile-time type of the assignment expression is `dynamic`, and the resolution described below will take place at run-time based on the run-time type of `E`.
@@ -4776,6 +7830,78 @@ i += 1;             // Ok
 ```
 the lifted operator `+(int?,int?)` is used.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> Conversion of compound assignment expressions to query expression trees produces a compile-time error.
+>
+> When converted to a generalized expression tree, a compound assignment expression of the form
+>
+> ```csharp
+> x op= y
+> ```
+>
+> proceeds by first defining an identifier `M` with value
+>
+> * `Add` if `op` is `+`, or,
+> * `Subtract` if `op` is `-`, or,
+> * `Multiply` if `op` is `*`, or,
+> * `Divide` if `op` is `/`, or,
+> * `Modulo` if `op` is `%`, or,
+> * `And` if `op` is `&`, or,
+> * `Or` if `op` is `|`, or,
+> * `ExclusiveOr` if `op` is `^`, or,
+> * `LeftShift` if `op` is `<<`, or,
+> * `RightShift` if `op` is `>>`,
+>
+> and by converting `x` to an expression tree `xExpr`. Conversion of the right-hand side of the expression to an expression tree `yExpr` is done by converting
+>
+> ```csharp
+> (T)y
+> ```
+>
+> to an expression tree, if `y` needs an implicit conversion to the type `T` of `x`, where the cast expression is classified as compiler-generated, or by converting
+>
+> ```csharp
+> y
+> ```
+>
+> to an expression tree, otherwise.
+>
+> Next, the steps for converting the expression `x op y` to an expression tree (see various sections of this specification) are performed to construct a method invocation expression `info` that invokes `Q.MInfo` which describes the underlying operation.
+>
+> Next, an expression `leftConversion` is constructed by checking whether the evaluation of `x + y` requires an implicit conversion of `x` to some type `T`. If such a conversion is needed, `leftConversion` is defined as the result of calling `Q.ConvertInfo` using the expression tree conversion rules for `(T)x` to an expression tree. Otherwise, `leftConversion` is the `default` literal.
+>
+> Next, an expression `finalConversion` is constructed by checking whether the evaluation of `x + y` requires an implicit conversion to some type `T` prior to assignment to `x`. If such a conversion is needed, `finalConversion` is defined as the result of calling `Q.ConvertInfo` using the expression tree conversion rules for `(T)(x op y)` to an expression tree. Otherwise, `finalConversion` is the `default` literal.
+>
+> Note that the resulting `info`, `leftConversion`, and `finalConversion` expressions can describe any of the following behaviors:
+>
+> * The use of a user-defined operator referenced using a `MethodInfo`.
+> * The use of checked arithmetic indicated by a `Q.Flags.CheckedContext` flag.
+> * The use of nullable lifting indicated by a `Q.Flags.IsLifted` flag.
+> * The use of dynamic binding specified through a `binder` object.
+>
+> Finally, the resulting expressions are then combined into
+>
+> ```csharp
+> Q.MAssign(info, xExpr, yExpr)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.MAssignInfo(flags, leftConversion, finalConversion, isEventBinder)
+> ```
+>
+> if the `op` is `+` or `-` and the compound assignment is dynamically bound, where `isEventBinder` is an object representing the dynamic operation required to check whether `x` represents an event access, or
+>
+> ```csharp
+> Q.MAssignInfo(flags, leftConversion, finalConversion)
+> ```
+>
+> otherwise, where `flags` is `Q.Flags.CheckedContext` if the expression occurs in a checked context, or `default(Q.Flags)` otherwise.
+>
+> Note that `leftConversion` and `finalConversion` may be `default` literals, so the expression tree library should define `MAssignInfo` methods such that target typing results in no ambiguity during overload resolution.
+
 ### Event assignment
 
 If the left operand of a `+=` or `-=` operator is classified as an event access, then the expression is evaluated as follows:
@@ -4785,6 +7911,57 @@ If the left operand of a `+=` or `-=` operator is classified as an event access,
 *  An event accessor of the event is invoked, with argument list consisting of the right operand, after evaluation and, if necessary, conversion. If the operator was `+=`, the `add` accessor is invoked; if the operator was `-=`, the `remove` accessor is invoked.
 
 An event assignment expression does not yield a value. Thus, an event assignment expression is valid only in the context of a *statement_expression* ([Expression statements](statements.md#expression-statements)).
+
+> __Expression Tree Conversion Translation Steps__
+>
+> Conversion of event assignment expressions to query expression trees produces a compile-time error.
+>
+> When converted to a generalized expression tree, an event assignment expression of the form
+>
+> ```csharp
+> x op= y
+> ```
+>
+> proceeds by first defining an identifier `M` with value
+>
+> * `Add` if `op` is `+`, or,
+> * `Subtract` if `op` is `-`,
+>
+> and by converting `instance` to an expression tree `instanceExpr` if `x` is an event access `instance.E` with an instance expression. Conversion of the right-hand side of the expression to an expression tree `yExpr` is done by converting
+>
+> ```csharp
+> (T)y
+> ```
+>
+> to an expression tree, if `y` needs an implicit conversion to the type `T` of `x`, where the cast expression is classified as compiler-generated, or by converting
+>
+> ```csharp
+> y
+> ```
+>
+> to an expression tree, otherwise.
+>
+> The expression is then translated into
+>
+> ```csharp
+> Q.EventM(info, instanceExpr, yExpr)
+> ```
+>
+> if `instanceExpr` is defined above, or into
+>
+> ```csharp
+> Q.EventM(info, yExpr)
+> ```
+>
+> otherwise, where `info` is
+>
+> ```csharp
+> Q.EventMInfo(default(Q.Flags), method)
+> ```
+>
+> where the flags parameter is reserved for future use, and `method` is an expression of type `MethodInfo` representing the `add` or `remove` accessor of the target event.
+>
+> Note that dynamically bound event assignment operations are covered by the rules for [Compound assignment](#compound-assignment).
 
 ## Expression
 
@@ -4813,7 +7990,7 @@ constant_expression
     ;
 ```
 
-A constant expression must be the `null` literal or a value with one of  the following types: `sbyte`, `byte`, `short`, `ushort`, `int`, `uint`, `long`, `ulong`, `char`, `float`, `double`, `decimal`, `bool`, `object`, `string`, or any enumeration type. Only the following constructs are permitted in constant expressions:
+A constant expression must be the `null` literal or a value with one of the following types: `sbyte`, `byte`, `short`, `ushort`, `int`, `uint`, `long`, `ulong`, `char`, `float`, `double`, `decimal`, `bool`, `object`, `string`, or any enumeration type. Only the following constructs are permitted in constant expressions:
 
 *  Literals (including the `null` literal).
 *  References to `const` members of class and struct types.
@@ -4863,6 +8040,29 @@ Constant expressions occur in the contexts listed below. In these contexts, a co
 
 An implicit constant expression conversion ([Implicit constant expression conversions](conversions.md#implicit-constant-expression-conversions)) permits a constant expression of type `int` to be converted to `sbyte`, `byte`, `short`, `ushort`, `uint`, or `ulong`, provided the value of the constant expression is within the range of the destination type.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> Conversion of constant expressions to query expression trees proceeds as follows:
+>
+> ```csharp
+> Expression.Constant(expr, type)
+> ```
+>
+> where `expr` is the original constant expression, and `type` is an expression of type `Type` representing the type of the constant expression. By applying the rules described in this section, this results in compile-time evaluation of `expr` to a constant value, or a compile-time exception.
+>
+> Conversion of constant expressions to generalized expression trees suppresses compile-time evaluation and constructs an expression tree out of the underlying expression.
+>
+> ***TODO***
+> * Review the compile-time evaluation suppression for generalized expression trees, which may be contentious.
+>   * There is prior art of this, e.g. in F#.
+>   * This approach results in higher fidelity WYSIWYG expression trees.
+>   * Reduced runtime performance can be a concern:
+>     * More expression tree nodes get constructed.
+>     * Naive expression tree evaluation may skip constant folding steps.
+>     * One option would be for an expression type to be configurable, e.g. support a flags enum value on the `ExpressionFactoryAttribute` attribute.
+>       * One such flag could then control compile-time evaluation of constant expressions.
+>       * We should proceed with care and avoid a 747 cockpit of flags, but not prematurely rule out use of flags and think of other cases that may warrant such knobs. The distinction of typed versus untyped quotes in # is a good example, though it's not a declaration site thing (on the quote type) but a use site choice (`<@...@>` versus `<@@..@@>`).
+
 ## Boolean expressions
 
 A *boolean_expression* is an expression that yields a result of type `bool`; either directly or through application of `operator true` in certain contexts as specified in the following.
@@ -4882,3 +8082,57 @@ A *boolean_expression* `E` is required to be able to produce a value of type `bo
 *  If no such operator is found, a binding-time error occurs.
 
 The `DBBool` struct type in [Database boolean type](structs.md#database-boolean-type) provides an example of a type that implements `operator true` and `operator false`.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> A Boolean expression
+>
+> ```csharp
+> b
+> ```
+>
+> is translated into an expression tree by first pre-processing the expression to
+>
+> ```csharp
+> (bool)b
+> ```
+>
+> if `b` is implicitly convertible to `bool`. Note that this pre-processing step may introduce a cast expression which will be classified as compiler-generated.
+>
+> The expression is then translated into an expression tree by first translating the resulting expression to `bExpr`. Expression tree translation then proceeds as follows.
+>
+> When subject to conversion to a query expression tree, the expression is translated into
+>
+> ```csharp
+> Expression.Call(null, method, bExpr)
+> ```
+>
+> if the operator is bound to a user-defined `operator true`, where `method` is an expression of type `MethodInfo` representing the method implementing `operator true`, or into
+>
+> ```csharp
+> bExpr
+> ```
+>
+> otherwise.
+>
+> Note that query expression trees do not bind to the `Expression.IsTrue` factory method for reasons of compatibility. An example of a case where an Boolean expression can occur in a query expression tree is use of the conditional `?:` operator with a condition of type `DBBool` (see [Database boolean type](structs.md#database-boolean-type)).
+>
+> When subject to conversion to a generalized expression tree it is translated into
+>
+> ```csharp
+> Q.IsTrue(info, bExpr)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.IsTrueInfo(Q.Flags.CompilerGenerated, method)
+> ```
+>
+> if the operator is bound to a user-defined `operator true`, where `method` is an expression of type `MethodInfo` representing the method implementing `operator true`, or into
+>
+> ```csharp
+> bExpr
+> ```
+>
+> otherwise, which may include a `Convert` node marked as `Q.Flags.CompilerGenerated`.

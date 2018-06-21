@@ -33,9 +33,17 @@ The initial value of a static variable is the default value ([Default values](va
 
 For purposes of definite assignment checking, a static variable is considered initially assigned.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> Expression trees can only contain use sites of static variables, which involves the use of a member access expression. Expression tree translation of such expressions is described in [Member access](expressions.md#member-access).
+
 ### Instance variables
 
 A field declared without the `static` modifier is called an ***instance variable***.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> Expression trees can only contain use sites of instance variables, which involves the use of a member access expression. Expression tree translation of such expressions is described in [Member access](expressions.md#member-access).
 
 #### Instance variables in classes
 
@@ -59,6 +67,10 @@ The initial value of each of the elements of an array is the default value ([Def
 
 For the purpose of definite assignment checking, an array element is considered initially assigned.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> Expression trees can access array elements using array access expressions. Expression tree translation of such expressions is described in [Array access](expressions.md#array-access).
+
 ### Value parameters
 
 A parameter declared without a `ref` or `out` modifier is a ***value parameter***.
@@ -66,6 +78,55 @@ A parameter declared without a `ref` or `out` modifier is a ***value parameter**
 A value parameter comes into existence upon invocation of the function member (method, instance constructor, accessor, or operator) or anonymous function to which the parameter belongs, and is initialized with the value of the argument given in the invocation. A value parameter normally ceases to exist upon return of the function member or anonymous function. However, if the value parameter is captured by an anonymous function ([Anonymous function expressions](expressions.md#anonymous-function-expressions)), its life time extends at least until the delegate or expression tree created from that anonymous function is eligible for garbage collection.
 
 For the purpose of definite assignment checking, a value parameter is considered initially assigned.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> Expression trees can declare and use value parameters.
+>
+> The declaration of value parameters occurs as part of [Anonymous function expressions](expressions.md#anonymous-function-expressions). For purposes of conversion to expression trees, an *explicit_anonymous_function_parameter* of the form
+>
+> ```csharp
+> T p
+> ```
+>
+> is translated to
+>
+> ```csharp
+> var t = Expression.Parameter(typeof(T), "p");
+> ```
+>
+> when converted to a query expression tree, or to
+>
+> ```csharp
+> var t = Q.Parameter(info);
+> ```
+>
+> when converted to a generalized expression tree, where `info` is
+>
+> ```csharp
+> Q.ParameterInfo(flags, typeof(T), "p")
+> ```
+>
+> where `flags` is `Q.Flags.CompilerGenerated` if the parameter is compiler-generated, or `default(Q.Flags)` otherwise.
+>
+> Note that compiler-generated parameters occur as part of the translation of [Transparent identifiers](expressions.md#transparent-identifiers) or an *anonymous_method_expression* (see [Anonymous function expressions](expressions.md#anonymous-function-expressions)).
+>
+> The compiler-generated variable `t`, which is otherwise invisible, is used to refer to the parameter in use sites
+>
+> ```csharp
+> p
+> ```
+>
+> which are converted to
+>
+> ```csharp
+> t
+> ```
+>
+> where `t` is the expression tree node that corresponds to the declaration of parameter `p`.
+>
+> ***TODO***
+> * See remarks on [Anonymous function expressions](expressions.md#anonymous-function-expressions) for possible augmentations to this section if we support cross-referencing of variables across different expression tree types.
 
 ### Reference parameters
 
@@ -79,6 +140,64 @@ The following definite assignment rules apply to reference parameters. Note the 
 *  Within a function member or anonymous function, a reference parameter is considered initially assigned.
 
 Within an instance method or instance accessor of a struct type, the `this` keyword behaves exactly as a reference parameter of the struct type ([This access](expressions.md#this-access)).
+
+> __Expression Tree Conversion Translation Steps__
+>
+> Expression trees can declare and use reference parameters.
+>
+> The declaration of reference parameters occurs as part of [Anonymous function expressions](expressions.md#anonymous-function-expressions). For purposes of conversion to expression trees, an *explicit_anonymous_function_parameter* of the form
+>
+> ```csharp
+> ref T p
+> ```
+>
+> is translated to
+>
+> ```csharp
+> var t = Expression.Parameter(typeof(T).MakeByRefType(), "p");
+> ```
+>
+> when converted to a query expression tree, or to
+>
+> ```csharp
+> var t = Q.Parameter(info);
+> ```
+>
+> when converted to a generalized expression tree, where `info` is
+>
+> ```csharp
+> Q.ParameterInfo(flags, typeof(T).MakeByRefType(), "p")
+> ```
+>
+> where `flags` is the bitwise `|` combination of `Q.Flags.IsRef` and:
+>
+> * `Q.Flags.CompilerGenerated` if the parameter is compiler-generated, and,
+> * `default(Q.Flags)` otherwise.
+>
+> Note that compiler-generated parameters occur as part of an *anonymous_method_expression* (see [Anonymous function expressions](expressions.md#anonymous-function-expressions)).
+>
+> The compiler-generated variable `t`, which is otherwise invisible, is used to refer to the parameter in use sites
+>
+> ```csharp
+> p
+> ```
+>
+> or
+>
+> ```csharp
+> ref p
+> ```
+>
+> which are converted to
+>
+> ```csharp
+> t
+> ```
+>
+> where `t` is the expression tree node that corresponds to the declaration of parameter `p`.
+>
+> ***TODO***
+> * See remarks on [Anonymous function expressions](expressions.md#anonymous-function-expressions) for possible augmentations to this section if we support cross-referencing of variables across different expression tree types.
 
 ### Output parameters
 
@@ -94,6 +213,61 @@ The following definite assignment rules apply to output parameters. Note the dif
 *  Every output parameter of a function member or anonymous function must be definitely assigned ([Definite assignment](variables.md#definite-assignment)) before the function member or anonymous function returns normally.
 
 Within an instance constructor of a struct type, the `this` keyword behaves exactly as an output parameter of the struct type ([This access](expressions.md#this-access)).
+
+> __Expression Tree Conversion Translation Steps__
+>
+> Expression trees can declare and use output parameters.
+>
+> The declaration of output parameters occurs as part of [Anonymous function expressions](expressions.md#anonymous-function-expressions). For purposes of conversion to expression trees, an *explicit_anonymous_function_parameter* of the form
+>
+> ```csharp
+> out T p
+> ```
+>
+> is translated to
+>
+> ```csharp
+> var t = Expression.Parameter(typeof(T).MakeByRefType(), "p");
+> ```
+>
+> when converted to a query expression tree, or to
+>
+> ```csharp
+> var t = Q.Parameter(info);
+> ```
+>
+> when converted to a generalized expression tree, where `info` is
+>
+> ```csharp
+> Q.ParameterInfo(flags, typeof(T).MakeByRefType(), "p")
+> ```
+>
+> where `flags` is `Q.Flags.IsOut`.
+>
+> Note that compiler-generated output parameters cannot occur. For instance, it is invalid to omit output parameters on an *anonymous_method_expression* (see [Anonymous function expressions](expressions.md#anonymous-function-expressions)).
+>
+> The compiler-generated variable `t`, which is otherwise invisible, is used to refer to the parameter in use sites
+>
+> ```csharp
+> p
+> ```
+>
+> or
+>
+> ```csharp
+> out p
+> ```
+>
+> which are converted to
+>
+> ```csharp
+> t
+> ```
+>
+> where `t` is the expression tree node that corresponds to the declaration of parameter `p`.
+>
+> ***TODO***
+> * See remarks on [Anonymous function expressions](expressions.md#anonymous-function-expressions) for possible augmentations to this section if we support cross-referencing of variables across different expression tree types.
 
 ### Local variables
 
@@ -112,6 +286,54 @@ A local variable introduced by a *foreach_statement* or a *specific_catch_clause
 The actual lifetime of a local variable is implementation-dependent. For example, a compiler might statically determine that a local variable in a block is only used for a small portion of that block. Using this analysis, the compiler could generate code that results in the variable's storage having a shorter lifetime than its containing block.
 
 The storage referred to by a local reference variable is reclaimed independently of the lifetime of that local reference variable ([Automatic memory management](basic-concepts.md#automatic-memory-management)).
+
+> __Expression Tree Conversion Translation Steps__
+>
+> Declarations of local variables are not supported in query expression trees. The only variables that can be declared in query expression trees are parameters.
+>
+> Use sites of local variables are supported in query expression trees and solely involve accessing captured outer variables (see [Captured outer variables](expressions.md#captured-outer-variables)) because query expression trees can not declare local variables.
+>
+> Declarations of local variables are converted to generalized expression trees as follows. Let `name` be an expression of type `string` representing the identifier of the variable, and let `type` be an expression of type `Type` representing the type of the variable, which may have been inferred (for instance, when `var` was used to declare the variable). If the type of the variable is `dynamic`, the `type` expression will represent `typeof(object)`.
+>
+> Expression tree conversion of a local variable declaration then results in
+>
+> ```csharp
+> var t = Q.Variable(info);
+> ```
+>
+> when converted to a generalized expression tree, where `info` is
+>
+> ```csharp
+> Q.VariableInfo(flags, type, name)
+> ```
+>
+> where `flags` is `Q.Flags.CompilerGenerated` if the parameter is compiler-generated, or `default(Q.Flags)` otherwise.
+>
+> The compiler-generated variable `t`, which is otherwise invisible, is used to refer to the variable in use sites
+>
+> ```csharp
+> v
+> ```
+>
+> which are converted to
+>
+> ```csharp
+> t
+> ```
+>
+> where `t` is the expression tree node that corresponds to the declaration of variable `v` which occurs in the expression tree.
+>
+> If variable `v` is used within an expression tree, but the variable is declared outside the outermost expression tree surrounding the use site
+>
+> ```csharp
+> v
+> ```
+>
+> it is translated according to the rules for accessing captured outer variables (see [Captured outer variables](expressions.md#captured-outer-variables)).
+>
+> ***TODO***
+> * Determine if there are any places in C# <= 7 where compiler-generated variables occur (akin to transparent identifiers or omitted parameters on anonymous method expressions in C# <= 3).
+> * Evaluate whether `VariableInfo` can also capture the differentiation of `dynamic` versus `object`, for instance by changing `type` from `Type` to some value returned by a `Q.TypeInfo` factory which supports a richer descriptor of a type (e.g. using the encoding used in `DynamicAttribute`). This remark applies for all places where we refer to types.
 
 ## Default values
 
@@ -634,6 +856,18 @@ variable_reference
 ```
 
 In C and C++, a *variable_reference* is known as an *lvalue*.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> Expression trees can refer to variables. Translation to an expression tree of a *variable_reference* expression is described in the sections above, and involves expression trees of the following forms:
+>
+> * member access expressions ([Member access](expressions.md#member-access)), or,
+> * array access expressions ([Array access](expressions.md#array-access)), or,
+> * `t` where `t` is a variable which has been assigned the expression tree representing any of the following:
+>   * a local variable that has not been captured by an anonymous function ([Captured outer variables](expressions.md#captured-outer-variables)), or,
+>   * a value parameter ([Value parameters](#value-parameters)), or
+>   * a reference parameter ([Reference parameters](#reference-parameters)), or
+>   * an output parameter ([Output parameters](#output-parameters)).
 
 ## Atomicity of variable references
 

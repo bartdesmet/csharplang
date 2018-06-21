@@ -195,3 +195,44 @@ int[] z = new int[3] {0, 1, 2, 3};     // Error, length/initializer mismatch
 ```
 
 Here, the initializer for `y` results in a compile-time error because the dimension length expression is not a constant, and the initializer for `z` results in a compile-time error because the length and the number of elements in the initializer do not agree.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> Translation of an *expression* in a *variable_initializer* is performed by first rewriting the *expression* to
+>
+> * `(T)(expression)` if an implicit conversion is required to assign the expression to array element type `T`, where the introduced cast expression is classified as compiler-generated, or
+> * `expression` otherwise.
+>
+> The resulting *expression* is then translated to an expression tree `expr`. Expression tree conversion then proceeds as follows.
+>
+> When converted to a query expression tree, a compiler-time error is produced if any *variable_initializer* is an *array_initializer* (that is, if nested array initializers are used to initialize a multi-dimensional array). Otherwise, it is translated to
+>
+> ```csharp
+> empty
+> ```
+>
+> where `empty` is an expression of type `Expression[]` representing an empty array, or to
+>
+> ```csharp
+> new Expression[] { expr_1, ..., expr_N }
+> ```
+>
+> where `expr_i` (for `1 <= i <= N`) is an expression `expr` corresponding to the `i`th element in the *variable_initializer*.
+>
+> Note that query expression trees do not provide support for initialization of multi-dimensional arrays. The resulting `Expression[]` produced by the expression tree translation steps is used as an argument to the `Expression.NewArrayInit` invocation (see [Array creation expressions](expressions.md#array-creation-expressions)).
+>
+> When converted to a generalized expression tree, an *array_initializer* is translated to
+>
+> ```csharp
+> Q.ArrayInitializer(default(Q.Flags))
+> ```
+>
+> if no *variable_initializer_list* is specified, or to
+>
+> ```csharp
+> Q.ArrayInitializer(default(Q.Flags), init_1, ..., init_N)
+> ```
+>
+> otherwise, where `init_1` to `init_N` are the result of translating each *variable_initializer* to an expression tree.
+>
+> Note that generalized expression tree libraries can support initialization of multi-dimensional arrays by providing overloads on `ArrayInitializer` with parameters that are assignment compatible with the return type of `ArrayInitializer`, thus allowing for arbitrary nesting depth.

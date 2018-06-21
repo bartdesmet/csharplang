@@ -726,3 +726,16 @@ Two things are important to make explicit:
 
     After executing this code,  `i1` and `i2` will both have the value `2`.
 
+> ***TODO**
+> * Consider introducing flags on the builder type which can influence the following aspects of expression tree conversion:
+>   * `ExpressionConversionBehavior.CompileTimeConstantFolding` to enable compile-time evaluation of constant expressions. The proposed default is for this behavior to be disabled, so that expression tree conversion of `1 + 2` results in an `Add` node with two `Constant` node children, rather than a `Constant` node with value `3`.
+>   * `ExpressionConversionBehavior.SkipCompilerGenerated` to skip compiler-generated decorators around nodes. The best (or only?) example is implicit conversions. May have limited value and not warrant the cost, but could result in a reduction of runtime overhead. In fact, it may be similar to F#'s untyped quotations (`<@@...@@>`).
+>   * `ExpressionConversionBehavior.EmitDebugInfo` to include debug info one way or another. Such info would include the source text span (a triplet of a `string` with the document name with or without path info, and two `(line, column)` pairs to delineate the range in source code). Plays a similar role to `Expression.DebugInfo` in query expression tree APIs, but we may want to model this differently:
+>     * The `Expression.DebugInfo` approach is a decorator pattern that wraps a node and has an associated `Expression.ClearDebugInfo` to clear the sequence point.
+>     * An alternative is to generalize annotations akin to Roslyn and the custom attributes on F# quotations. This could be achieved by defining the concept of annotations in generalized expression trees as:
+>       * A fluent `WithAnnotations` interface pattern emitted by expression tree conversion, passing 1 or more arguments with annotations that apply to the node. Usual method overload resolution rules apply, but the typical implementation is likely to us an extension method with a `params` parameter.
+>       * An open-ended set of annotations which are constructed through method invocation expressions on `Q` and/or are defined elsewhere (for instance, if we use existing custom attributes).
+>       * This could reduce or eliminate our need for `Q.Flags`. For example, `CompilerGenerated` could be an annotation using `CompilerGeneratedAttribute` and similar mappings could exist for `IsRef`, `IsOut`, `ExtensionMethod`.
+>       * For example, `.WithAnnotations(Q.DebugInfo("foo.cs", 1, 5, 1, 9))`.
+>       * This is a very extensible mechanism and makes it easy to shake off things in a runtime library.
+
