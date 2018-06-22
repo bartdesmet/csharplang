@@ -964,7 +964,7 @@ For the purposes of determining the better function member, a stripped-down argu
 Parameter lists for each of the candidate function members are constructed in the following way:
 
 *  The expanded form is used if the function member was applicable only in the expanded form.
-*  Optional parameters with no corresponding arguments are removed from the parameter list
+*  Optional parameters with no corresponding arguments are removed from the parameter list.
 *  The parameters are reordered so that they occur at the same position as the corresponding argument in the argument list.
 
 Given an argument list `A` with a set of argument expressions `{E1, E2, ..., En}` and two applicable function members `Mp` and `Mq` with parameter types `{P1, P2, ..., Pn}` and `{Q1, Q2, ..., Qn}`, `Mp` is defined to be a ***better function member*** than `Mq` if
