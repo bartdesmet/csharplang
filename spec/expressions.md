@@ -964,7 +964,7 @@ For the purposes of determining the better function member, a stripped-down argu
 Parameter lists for each of the candidate function members are constructed in the following way:
 
 *  The expanded form is used if the function member was applicable only in the expanded form.
-*  Optional parameters with no corresponding arguments are removed from the parameter list.
+*  Optional parameters with no corresponding arguments are removed from the parameter list
 *  The parameters are reordered so that they occur at the same position as the corresponding argument in the argument list.
 
 Given an argument list `A` with a set of argument expressions `{E1, E2, ..., En}` and two applicable function members `Mp` and `Mq` with parameter types `{P1, P2, ..., Pn}` and `{Q1, Q2, ..., Qn}`, `Mp` is defined to be a ***better function member*** than `Mq` if
@@ -1609,10 +1609,13 @@ The intuitive effect of the resolution rules described above is as follows: To l
 > if the method invocation is dynamically bound, where `binder` is an expression of type `Microsoft.CSharp.RuntimeBinder.CallSiteBinder` representing the dynamic operation, or
 >
 > ```csharp
-> Q.CallInfo(default(Q.Flags), method)
+> Q.CallInfo(flags, method)
 > ```
 >
-> otherwise, where the first flags argument is reserved for future use, and `method` is an expression of type `MethodInfo` representing the bound method `M`.
+> otherwise, where `method` is an expression of type `MethodInfo` representing the bound method `M`, and `flags` is
+>
+> * `Q.Flags.ResultDiscarded` if the expression occurs in an *expression_statement* ([Expression statements](statements.md#expression-statements)), or,
+> * `default(Q.Flags)` otherwise.
 >
 > ***TODO***
 > * Consider whether `argsExpr` should be a syntactic fragment of shape `(, argExpr)*` that gets concatenated to the argument list containing `info` and `fExpr`, thus flattening the first-class representation of an argument list and "inlining" it on the `Call` factory (much like query expression trees does).
@@ -1772,10 +1775,13 @@ C.H(3)
 > where `info` is
 >
 > ```csharp
-> Q.CallInfo(Q.Flags.InvokeExtensionMethod, method)
+> Q.CallInfo(flags, method)
 > ```
 >
-> where `method` is an expression of type `MethodInfo` representing the bound method `M`.
+> where `method` is an expression of type `MethodInfo` representing the bound method `M`, and `flags` is the bitwise `|` combination of the following:
+>
+> * `Q.Flags.InvokeExtensionMethod`, and
+> * `Q.Flags.ResultDiscarded` if the expression occurs in an *expression_statement* ([Expression statements](statements.md#expression-statements)).
 >
 > Note that the use of `Q.Flags.InvokeExtensionMethod` enables expression tree libraries to distinguish between invoking an extension method using instance method invocation syntax and invoking it using static method invocation syntax. Expression tree libraries can trivially rewrite extension method invocation expressions into static method invocation expression by inspecting this flag, for instance for purposes of evaluating the expression.
 
@@ -1838,10 +1844,13 @@ The run-time processing of a delegate invocation of the form `D(A)`, where `D` i
 > if the delegate invocation is dynamically bound, where `binder` is an expression of type `Microsoft.CSharp.RuntimeBinder.CallSiteBinder` representing the dynamic operation, or
 >
 > ```csharp
-> Q.InvokeInfo(default(Q.Flags))
+> Q.InvokeInfo(flags)
 > ```
 >
-> otherwise, where the first flags argument is reserved for future use.
+> otherwise, where `flags` is
+>
+> * `Q.Flags.ResultDiscarded` if the expression occurs in an *expression_statement* ([Expression statements](statements.md#expression-statements)), or,
+> * `default(Q.Flags)` otherwise.
 >
 > ***TODO***
 > * Consider whether `argsExpr` should be a syntactic fragment of shape `(, argExpr)*` that gets concatenated to the argument list containing `info` and `fExpr`, thus flattening the first-class representation of an argument list and "inlining" it on the `Invoke` factory (much like query expression trees does).
@@ -2155,10 +2164,11 @@ An `operator ++` or `operator --` implementation can be invoked using either pos
 > Q.PostDecrementInfo(flags)
 > ```
 >
-> otherwise, where `flags` is either:
+> otherwise, where `flags` is the bitwise `|` combination of
 >
+> * `Q.Flags.ResultDiscarded` if the expression occurs in an *expression_statement* ([Expression statements](statements.md#expression-statements)), and,
 > * `Q.Flags.CheckedContext` if the prefix increment or decrement expression occurs in a checked context, or,
-> * `default(Q.Flags)` otherwise.
+> * `default(Q.Flags)` if none of the flags apply.
 >
 > Note that the behavior of a user-defined increment or decrement operator is typically not affected by the use in a checked context. For purposes of generalized expression trees, this information is retained for all operators, and passed as a flag. The bound expression tree library is free to ignore this information.
 >
@@ -2279,16 +2289,19 @@ The run-time processing of an *object_creation_expression* of the form `new T(A)
 > if the object creation expression is dynamically bound, where `binder` is an expression of type `Microsoft.CSharp.RuntimeBinder.CallSiteBinder` representing the dynamic operation, and where `type` is an expression of type `Type` representing the type `T`, or
 >
 > ```csharp
-> Q.NewInfo(default(Q.Flags), type)
+> Q.NewInfo(flags, type)
 > ```
 >
 > where `type` is an expression of type `Type`, if `T` is a struct type and no argument list is present, or if `T` is a generic parameter type with a `new()` constraint, or
 >
 > ```csharp
-> Q.NewInfo(default(Q.Flags), constructor)
+> Q.NewInfo(flags, constructor)
 > ```
 >
-> otherwise, where the first flags argument is reserved for future use, and `constructor` is an object of type `ConstructorInfo` representing the constructor bound by for the object creation expression.
+> otherwise, where `constructor` is an object of type `ConstructorInfo` representing the constructor bound by for the object creation expression, and `flags` is
+>
+> * `Q.Flags.ResultDiscarded` if the expression is occurs in an *expression_statement* ([Expression statements](statements.md#expression-statements)), or,
+> * `default(Q.Flags)` otherwise.
 >
 > Note that generalized expression trees prefer binding to a `NewInfo` factory with a `ConstructorInfo` if one is available, even if the object creation expression has no argument list specified. This reduces the need for expression tree libraries to use reflection to find the parameterless constructor.
 >
@@ -2323,10 +2336,15 @@ The run-time processing of an *object_creation_expression* of the form `new T(A)
 > When converted to a generalized expression tree, it is translated into
 >
 > ```csharp
-> Q.NewObjectInit(default(Q.Flags), newExpr, memberBindings)
+> Q.NewObjectInit(flags, newExpr, memberBindings)
 > ```
 >
-> where the first flags argument is reserved for future use, and where `memberBindings` is
+> where `flags` is
+>
+> * `Q.Flags.ResultDiscarded` if the expression is occurs in an *expression_statement* ([Expression statements](statements.md#expression-statements)), or,
+> * `default(Q.Flags)` otherwise,
+>
+> and where `memberBindings` is
 >
 > ```csharp
 > Q.MemberBindings(initExpr_1, ..., initExpr_N)
@@ -2355,10 +2373,15 @@ The run-time processing of an *object_creation_expression* of the form `new T(A)
 > When converted to a generalized expression tree, it is translated into
 >
 > ```csharp
-> Q.NewCollectionInit(default(Q.Flags), newExpr, elementInitializers)
+> Q.NewCollectionInit(flags, newExpr, elementInitializers)
 > ```
 >
-> where the first flags argument is reserved for future use, and where `elementInitializers` is
+> where `flags` is
+>
+> * `Q.Flags.ResultDiscarded` if the expression is occurs in an *expression_statement* ([Expression statements](statements.md#expression-statements)), or,
+> * `default(Q.Flags)` otherwise,
+>
+> and where `elementInitializers` is
 >
 > ```csharp
 > Q.ElementInitializers(initExpr_1, ..., initExpr_N)
@@ -3453,9 +3476,41 @@ The `checked` and `unchecked` operators and statements allow programmers to cont
 
 > __Expression Tree Conversion Translation Steps__
 >
-> For purposes of expression tree conversion, no expression tree nodes are constructed to represent an `unchecked` or a `checked` context. Instead, `Checked` variants of query expression tree factories are used, and `Q.Flags.CheckedContext` flags are passed to generalized expression tree factories.
+> For purposes of conversion to a query expression tree, no separate nodes are constructed to represent an `unchecked` or a `checked` context. Instead, `Checked` variants of query expression tree factories are used.
+>
+> For purposes of conversion to a generalized expression tree, `Q.Flags.CheckedContext` flags are passed to generalized expression tree factory invocations for expressions occurring within a `checked` context, and a node is constructed to retain the syntactic structure of the original code.
+>
+> Expression tree conversion starts by constructing an expression `expr` from converting the expression operand to an expression tree.
+>
+> When translating a `checked` operator, it is translated into
+>
+> ```csharp
+> Q.Checked(info, expr)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.CheckedInfo(flags)
+> ```
+>
+> and when translating an `unchecked` operator, it is translated into
+>
+> ```csharp
+> Q.Unchecked(info, expr)
+> ```
+> where `info` is
+>
+> ```csharp
+> Q.CheckedInfo(flags)
+> ```
+>
+> and `flags` is `Q.Flags.CompilerGenerated` if the operator was compiler-generated, or `default(Q.Flags)` otherwise.
+>
+> Note that the use of a separate node to represent `checked` and `unchecked` operators enables expression tree libraries to distinguish between a user explicitly opting in to checked or unchecked operations, and a compiler configuration flag influencing this behavior.
 >
 > ***TODO***
+> * Determine if syntactic WYSIWYG expression trees are desirable, because it introduces more node types. However, it's much easier to explain the correspondence between grammar productions and node types.
 > * Determine if `Q.Flags.CheckedContext` should be passed to **all** nodes constructed within a `checked` context. In particular, pass this flag not only to `Add`, `Multiple`, `Subtract`, and `Negate` factory methods. This could enable expression tree libraries to interpret `checked` more broadly, for instance when the user calls `Math.Pow` and an expression tree library supports a checked variant for well-known methods when evaluating or translating such an expression.
 
 ### Default value expressions
@@ -4189,10 +4244,11 @@ An `operator++` or `operator--` implementation can be invoked using either postf
 > Q.PreDecrementInfo(flags)
 > ```
 >
-> otherwise, where `flags` is either:
+> otherwise, where `flags` is the bitwise `|` combination of
 >
+> * `Q.Flags.ResultDiscarded` if the expression occurs in an *expression_statement* ([Expression statements](statements.md#expression-statements)), or,
 > * `Q.Flags.CheckedContext` if the prefix increment or decrement expression occurs in a checked context, or,
-> * `default(Q.Flags)` otherwise.
+> * `default(Q.Flags)` if none of the flags apply.
 >
 > Note that the behavior of a user-defined increment or decrement operator is typically not affected by the use in a checked context. For purposes of generalized expression trees, this information is retained for all operators, and passed as a flag. The bound expression tree library is free to ignore this information.
 >
@@ -4378,16 +4434,19 @@ An awaiter's implementation of the interface methods `INotifyCompletion.OnComple
 > where `info` is
 >
 > ```csharp
-> Q.AwaitInfo(context)
+> Q.AwaitInfo(flags, context)
 > ```
 >
 > if `expression` is of type `dynamic`, where `context` is an expression of type `Type` representing the nearest parent type where the await expression is used (for purposes of runtime binding), or
 >
 > ```csharp
-> Q.AwaitInfo(default(Q.Flags), getAwaiter, isCompleted, getResult)
+> Q.AwaitInfo(flags, getAwaiter, isCompleted, getResult)
 > ```
 >
-> otherwise, where the first flags parameter is reserved for future use.
+> otherwise, where `flags` is
+>
+> * `Q.Flags.ResultDiscarded` if the expression occurs in an *expression_statement* ([Expression statements](statements.md#expression-statements)), or,
+> * `default(Q.Flags)` otherwise.
 >
 > Note that the expression tree library can trivially infer any of the following from the supplied parameters to `AwaitInfo`:
 >
@@ -7784,8 +7843,13 @@ the assignments are all invalid, since `r.A` and `r.B` are not variables.
 > where `info` is
 >
 > ```csharp
-> Q.AssignInfo(default(Q.Flags))
+> Q.AssignInfo(flags)
 > ```
+>
+> where `flags` is
+>
+> * `Q.Flags.ResultDiscarded` if the expression occurs in an *expression_statement* ([Expression statements](statements.md#expression-statements)), or,
+> * `default(Q.Flags)` otherwise.
 >
 > ***TODO***
 > * Review the need for `info` nodes when no additional info is needed, with an eye on future extensions (or do we evolve by adding new factory methods only?).
@@ -7898,7 +7962,11 @@ the lifted operator `+(int?,int?)` is used.
 > Q.MAssignInfo(flags, leftConversion, finalConversion)
 > ```
 >
-> otherwise, where `flags` is `Q.Flags.CheckedContext` if the expression occurs in a checked context, or `default(Q.Flags)` otherwise.
+> otherwise, where `flags` is the bitwise `|` combination of
+>
+> * `Q.Flags.ResultDiscarded` if the expression occurs in an *expression_statement* ([Expression statements](statements.md#expression-statements)), and,
+> * `Q.Flags.CheckedContext` if the expression occurs in a checked context, or,
+> * `default(Q.Flags)` if none of the flags apply.
 >
 > Note that `leftConversion` and `finalConversion` may be `default` literals, so the expression tree library should define `MAssignInfo` methods such that target typing results in no ambiguity during overload resolution.
 

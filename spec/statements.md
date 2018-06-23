@@ -122,6 +122,38 @@ A *block* that contains one or more `yield` statements ([The yield statement](st
 *  It is a compile-time error for a `return` statement to appear in an iterator block (but `yield return` statements are permitted).
 *  It is a compile-time error for an iterator block to contain an unsafe context ([Unsafe contexts](unsafe-code.md#unsafe-contexts)). An iterator block always defines a safe context, even when its declaration is nested in an unsafe context.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> Translation of a *block* to a query expression tree produces a compile-time error. When converted to a generalized expression tree, and the block is an iterator block, a compile-time error occurs. Otherwise, it is translated into:
+>
+> ```csharp
+> Q.Block(info)
+> ```
+>
+> if the block is empty, or,
+>
+> ```csharp
+> Q.Block(info, stmtsExpr)
+> ```
+>
+> otherwise, where `stmtsExpr` is the result of converting the statement list to an expression tree, and `info` is
+>
+> ```csharp
+> Q.BlockInfo(default(Q.Flags))
+> ```
+>
+> if the block does not contain any variable declarations, or
+>
+> ```csharp
+> Q.BlockInfo(default(Q.Flags), scope)
+> ```
+>
+> otherwise, where `scope` is an expression obtained using the rules in [Scopes in expression trees](#scopes-in-expression-trees).
+>
+> ***TODO***
+> * Iterators are currently not supported in anonymous function expressions. If this restriction gets lifted, a `Q.IteratorBlockInfo` could be used for `info`, reusing the same node, or we could resort to using a flag.
+> * Refine language on the block containing variable declarations to be more precise. In particular, we don't want to imply any form of recursion into child nodes. We likely need to specifically call out all the nodes that contribute a variable to the block's scope (to be extended in C# 7 due to `out` variables, deconstruction, etc.).
+
 ### Statement lists
 
 A ***statement list*** consists of one or more statements written in sequence. Statement lists occur in *block*s ([Blocks](statements.md#blocks)) and in *switch_block*s ([The switch statement](statements.md#the-switch-statement)).
@@ -141,6 +173,20 @@ A statement in a statement list is reachable if at least one of the following is
 *  The statement is a labeled statement and the label is referenced by a reachable `goto` statement.
 
 The end point of a statement list is reachable if the end point of the last statement in the list is reachable.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> Translation of a *statement_list* to a query expression tree produces a compile-time error. When converted to a generalized expression tree, it is translated into:
+>
+> ```csharp
+> Q.StatementList(info, stmtExpr1, ..., stmtExprN)
+> ```
+>
+> where `stmtExpr1` to `stmtExprN` are the result of translating the statements to expression tree, and `info` is
+>
+> ```csharp
+> Q.StatementListInfo(default(Q.Flags))
+> ```
 
 ## The empty statement
 
@@ -175,6 +221,23 @@ void F() {
     exit: ;
 }
 ```
+
+> __Expression Tree Conversion Translation Steps__
+>
+> Translation of an *empty_statement* to a query expression tree produces a compile-time error. When converted to a generalized expression tree, it is translated into:
+>
+> ```csharp
+> Q.Empty(info)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.EmptyInfo(default(Q.Flags))
+> ```
+>
+> ***TODO***
+> * Review the use of an info node. Consistent on the one hand, verbose on the other. Support for annotations may do away with this.
 
 ## Labeled statements
 
@@ -359,6 +422,22 @@ Not all expressions are permitted as statements. In particular, expressions such
 
 Execution of an *expression_statement* evaluates the contained expression and then transfers control to the end point of the *expression_statement*. The end point of an *expression_statement* is reachable if that *expression_statement* is reachable.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> Translation of a *expression_statement* to a query expression tree produces a compile-time error. When converted to a generalized expression tree, it is translated into:
+>
+> ```csharp
+> Q.StatementExpression(info, expr)
+> ```
+>
+> where `expr` is the result of converting the *statement_expression* to an expression tree, and `info` is
+>
+> ```csharp
+> Q.EmptyInfo(default(Q.Flags))
+> ```
+>
+> Note that *statement_expression*s use `Q.Flags.ResultDiscarded` to denote that the result of evalating the expression is discarded. This information can be used for dynamic binding and to improve expression tree evaluation without having to manually track when results are discarded. A good example of this is code generation for `x++` and `x--` where the result of evaluating `x` prior to performing the increment or decrement operation can be discarded. The `StatementExpression` node retains the syntactic isomorphism between the original code and the generated expression tree, and also acts as a conversion to `void`.
+
 ## Selection statements
 
 Selection statements select one of a number of possible statements for execution based on the value of some expression.
@@ -409,6 +488,29 @@ The first embedded statement of an `if` statement is reachable if the `if` state
 The second embedded statement of an `if` statement, if present, is reachable if the `if` statement is reachable and the boolean expression does not have the constant value `true`.
 
 The end point of an `if` statement is reachable if the end point of at least one of its embedded statements is reachable. In addition, the end point of an `if` statement with no `else` part is reachable if the `if` statement is reachable and the boolean expression does not have the constant value `true`.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> Translation of an *if_statement* to a query expression tree produces a compile-time error. When converted to a generalized expression tree, it is translated into:
+>
+> ```csharp
+> Q.If(info, conditionExpr, thenStmtExpr)
+> ```
+>
+> if the statement does not have an `else` part, or
+>
+> ```csharp
+> Q.If(info, conditionExpr, thenStmtExpr, elseStmtExpr)
+> ```
+>
+> otherwise, where `conditionExpr` is the result if translating the boolean expression condition to an expression tree, `thenStmtExpr` is the result of translating the embedded statement immediately after the condition to an expression tree, `elseStmtExpr` is the result of translating the embedded statement following the `else` part to an expression tree, and `info` is
+>
+> ```csharp
+> Q.IfInfo(default(Q.Flags))
+> ```
+>
+> ***TODO***
+> * Decide on the strategy for info nodes. Even though these may be redundant now, it provides extensibility if statements change in the future from a semantic fashion. For example, if they allow binding to APIs and start requiring reflection info objects. A good example is `Lambda` where async lambdas were easily modeled by defining a new info factory, while keeping the syntactic structure of the node the same. Note that expression tree libraries can overload factory methods `X` to vary the return types based on the type returned from `XInfo`. For example, `Q.Lambda<T>(Q.LambdaInfo(...), ...)` may return a `LambdaQuote<T>` while `Q.Lambda<T>(Q.AsyncLambdaInfo(...), ...)` may return an `AsyncLambdaQuote<T>` if the library wishes to do so.
 
 ### The switch statement
 
@@ -575,6 +677,168 @@ The end point of a `switch` statement is reachable if at least one of the follow
 *  The `switch` statement is reachable, the switch expression is a non-constant value, and no `default` label is present.
 *  The `switch` statement is reachable, the switch expression is a constant value that doesn't match any `case` label, and no `default` label is present.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> Translation of a *switch_statement* to a query expression tree produces a compile-time error. When converted to a generalized expression tree, the following steps are taken.
+>
+> ### The `switch` expression
+>
+> Given a *switch_statement*
+>
+> ```antlr
+> switch_statement
+>     : 'switch' '(' expression ')' switch_block
+>     ;
+> ```
+>
+> of the form `switch (e) ...`, construct an expression `switchExpr` by converting the switch expression `e` to an expression tree, if the type of the switch expression `e` matches the governing type, or by converting the expression `(T)(e)` where `T` is the governing type, otherwise. The introduced cast expression, if any, is classified as compiler-generated and represents the user-defined implicit conversion ([User-defined conversions](conversions.md#user-defined-conversions)) to a supported governing type.
+>
+> ### The `break` label
+>
+> Construct a variable `breakLabel` holding an expression tree node representing a compiler-generated label according to the rules described in [Labeled statements](#labeled-statements). This compiler-generated label acts as the target for a `break` statement ([The break statement](statements.md#the-break-statement)) that breaks out of the *switch_statement*.
+>
+> If the *switch_block* does not contain any *switch_section*s or none of the *switch_section*s contains a `break` statement ([The break statement](statements.md#the-break-statement)) that breaks out of the *switch_statement*, `breakLabel` is not constructed.
+>
+> ### The `switch` block
+>
+> Construct a `switchBlockExpr` expression for the *switch_block*
+>
+> ```antlr
+> switch_block
+>     : '{' switch_section* '}'
+>     ;
+> ```
+>
+> by invoking the following factory:
+>
+> ```csharp
+> Q.SwitchBlock(info, switchSectionExpr_1, ..., switchSectionExpr_N)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.SwitchBlockInfo(default(Q.Flags))
+> ```
+>
+> and each `switchSectionExpr_i` expression (with `1 <= i <= N`) is constructed from the *switch_section*s that occur in the *switch_block*, in lexical order, if any exist, as described in the next section.
+>
+> ### The `switch` sections
+>
+> Construct each `switchSectionExpr_i` expression (with `1 <= i <= N`) from the `i`th *switch_section*
+>
+> ```antlr
+> switch_section
+>     : switch_label+ statement_list
+>     ;
+> ```
+>
+> in the parent *switch_block*, by constructing an expression `stmtExpr` from converting *statement_list* to an expression tree, and by constructing an expression `labelsExpr` as described in the next section. The switch section is then translated into
+>
+> ```csharp
+> Q.SwitchSection(info, labelsExpr, stmtExpr)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.SwitchSectionInfo(default(Q.Flags))
+> ```
+>
+> ### The `case` and `default` labels
+>
+> Construct a `labelsExpr` expression for all the *switch_label*s
+>
+> ```antlr
+> switch_label
+>     : 'case' constant_expression ':'
+>     | 'default' ':'
+>     ;
+> ```
+>
+> in a *switch_section* by invoking the following factory:
+>
+> ```csharp
+> Q.SwitchLabels(info, switchLabelExpr_1, ..., switchLabelExpr_M)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.SwitchLabelsInfo(default(Q.Flags))
+> ```
+>
+> and each `switchLabelExpr_i` expression (with `1 <= i <= M`) is constructed from the *switch_label*s that occur in the *switch_section*, in lexical order, as described below.
+>
+> A `default` switch label is translated into
+>
+> ```csharp
+> Q.SwitchLabelDefault(info)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.SwitchLabelDefaultInfo(default(Q.Flags))
+> ```
+>
+> if no `goto default` statement references the *switch_label*, or
+>
+> ```csharp
+> Q.SwitchLabelDefaultInfo(default(Q.Flags), defaultLabel)
+> ```
+>
+> otherwise, where `defaultLabel` is a variable holding an expression tree node representing a compiler-generated label according to the rules described in [Labeled statements](#labeled-statements). This compiler-generated label acts as the target for a `goto default` statement ([The goto statement](statements.md#the-goto-statement)) that jumps to the *switch_label*.
+>
+> A `case c` switch label is translated into
+>
+> ```csharp
+> Q.SwitchLabelCase(info, constExpr)
+> ```
+>
+> where `constExpr` is an expression constructed by converting the *constant_expression* `c` to an expression tree, if the type of `c` matches the governing type, or by converting the expression `(T)(c)` where `T` is the governing type, otherwise. The introduced cast expression, if any, is classified as compiler-generated and represents the user-defined implicit conversion ([User-defined conversions](conversions.md#user-defined-conversions)) to a supported governing type. 
+>
+> Furthermore, `info` is
+>
+> ```csharp
+> Q.SwitchLabelCaseInfo(default(Q.Flags))
+> ```
+>
+> if no `goto case` statement references the *switch_label*, or
+>
+> ```csharp
+> Q.SwitchLabelCaseInfo(default(Q.Flags), caseLabel)
+> ```
+>
+> otherwise, where `caseLabel` is a variable holding an expression tree node representing a compiler-generated label according to the rules described in [Labeled statements](#labeled-statements). This compiler-generated label acts as the target for a `goto case` statement ([The goto statement](statements.md#the-goto-statement)) that jumps to the *switch_label*.
+>
+> Note that the *constant_expression* specified on a `case` label is evaluated at compile time to allow for comparison of its value to any of the `goto case` statements' *constant_expression*. The relationship between a `case` label and a `goto case` statement is established by sharing a label node in the resulting expression tree. However, the expression tree for *constant_expression* is retained as well (both on the `case` label and on any `goto case` statement), either in its compile-time evaluated form, or in its raw form if compile-time evaluation is suppressed in expression trees. This enables expression tree libraries to inspect the original expressions and enables them to perform a variety of analyses and manipulations.
+>
+> ### Constructing the expression tree
+>
+> Given the constituents built using the steps described in the previous sections, the expression tree for the *switch_statement* is constructed as follows:
+>
+> ```csharp
+> Q.Switch(info, switchExpr, switchBlockExpr)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.SwitchInfo(default(Q.Flags), breakLabel)
+> ```
+>
+> if `breakLabel` has been defined, or
+>
+> ```csharp
+> Q.SwitchInfo(default(Q.Flags))
+> ```
+>
+> otherwise.
+>
+> ***TODO***
+> * C# 7 adds scoped locals to the bound node, due to declaration expressions. These would be passed to the `SwitchInfo` factory method as a third argument supplied with the result of the `ScopeInfo` factory method.
+
 ## Iteration statements
 
 Iteration statements repeatedly execute an embedded statement.
@@ -613,6 +877,43 @@ The end point of a `while` statement is reachable if at least one of the followi
 *  The `while` statement contains a reachable `break` statement that exits the `while` statement.
 *  The `while` statement is reachable and the boolean expression does not have the constant value `true`.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> Translation of a *while_statement* to a query expression tree produces a compile-time error. When converted to a generalized expression tree, it is translated into:
+>
+> ```csharp
+> Q.While(info, conditionExpr, stmtExpr)
+> ```
+>
+> where `conditionExpr` is the result if translating the boolean expression condition to an expression tree, `stmtExpr` is the result of translating the embedded statement, and `info` is
+>
+> ```csharp
+> Q.WhileInfo(default(Q.Flags))
+> ```
+>
+> if no `break` or `continue` statements exist within the body of the iteration statement, targeting the current iteration statement, or
+>
+> ```csharp
+> Q.WhileInfo(default(Q.Flags), breakLabel)
+> ```
+>
+> if a `break` statement exists but no `continue` statement exists within the body of the iteration statement, targeting the current iteration statement, or
+>
+> ```csharp
+> Q.WhileInfo(default(Q.Flags), breakLabel, continueLabel)
+> ```
+>
+> otherwise, where `breakLabel` and `continueLabel` refer to variables holding expression tree nodes representing compiler-generated labels according to the rules described in [Labeled statements](#labeled-statements). If no `break` statement exists within the body of the iteration statement, targeting the current iteration statement, `breakLabel` will be the `default` literal instead.
+>
+> The rationale of these overloads is to allow for efficient expression tree libraries that can detect control flow behavior associated with the loop, without having to perform complex analysis of the iteration statement body. Note that libraries can implement `WhileInfo` using two optional parameters rather than having three distinct overloads. For example:
+>
+> ```csharp
+> static WhileInfo WhileInfo(Flags flags, LabelInfo @break = default, LabelInfo @continue = default) => ...
+> ```
+>
+> ***TODO***
+> * C# 7 adds scoped locals to the bound node, due to declaration expressions. These would be passed to the `WhileInfo` factory method as a fourth argument supplied with the result of the `ScopeInfo` factory method.
+
 ### The do statement
 
 The `do` statement conditionally executes an embedded statement one or more times.
@@ -636,6 +937,43 @@ The end point of a `do` statement is reachable if at least one of the following 
 
 *  The `do` statement contains a reachable `break` statement that exits the `do` statement.
 *  The end point of the embedded statement is reachable and the boolean expression does not have the constant value `true`.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> Translation of a *do_statement* to a query expression tree produces a compile-time error. When converted to a generalized expression tree, it is translated into:
+>
+> ```csharp
+> Q.Do(info, stmtExpr, conditionExpr)
+> ```
+>
+> where `stmtExpr` is the result of translating the embedded statement, `conditionExpr` is the result if translating the boolean expression condition to an expression tree, and `info` is
+>
+> ```csharp
+> Q.DoInfo(default(Q.Flags))
+> ```
+>
+> if no `break` or `continue` statements exist within the body of the iteration statement, targeting the current iteration statement, or
+>
+> ```csharp
+> Q.DoInfo(default(Q.Flags), breakLabel)
+> ```
+>
+> if a `break` statement exists but no `continue` statement exists within the body of the iteration statement, targeting the current iteration statement, or
+>
+> ```csharp
+> Q.DoInfo(default(Q.Flags), breakLabel, continueLabel)
+> ```
+>
+> otherwise, where `breakLabel` and `continueLabel` refer to variables holding expression tree nodes representing compiler-generated labels according to the rules described in [Labeled statements](#labeled-statements). If no `break` statement exists within the body of the iteration statement, targeting the current iteration statement, `breakLabel` will be the `default` literal instead.
+>
+> The rationale of these overloads is to allow for efficient expression tree libraries that can detect control flow behavior associated with the loop, without having to perform complex analysis of the iteration statement body. Note that libraries can implement `DoInfo` using two optional parameters rather than having three distinct overloads. For example:
+>
+> ```csharp
+> static DoInfo DoInfo(Flags flags, LabelInfo @break = default, LabelInfo @continue = default) => ...
+> ```
+>
+> ***TODO***
+> * C# 7 adds scoped locals to the bound node, due to declaration expressions. These would be passed to the `DoInfo` factory method as a fourth argument supplied with the result of the `ScopeInfo` factory method.
 
 ### The for statement
 
@@ -912,6 +1250,24 @@ A `break` statement is executed as follows:
 
 Because a `break` statement unconditionally transfers control elsewhere, the end point of a `break` statement is never reachable.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> Translation of a *break_statement* to a query expression tree produces a compile-time error. When converted to a generalized expression tree, it is translated into:
+>
+> ```csharp
+> Q.Break(info)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.BreakInfo(default(Q.Flags), label)
+> ```
+>
+> where `label` is a variable corresponding to the break label introduced by the closest parent *loop_statement* or the closes parent *switch_statement* using the steps described in [Labeled statements](#labeled-statements). 
+>
+> Note that this design can enable breaking out of other loops than the closest parent *loop_statement*.
+
 ### The continue statement
 
 The `continue` statement starts a new iteration of the nearest enclosing `while`, `do`, `for`, or `foreach` statement.
@@ -934,6 +1290,24 @@ A `continue` statement is executed as follows:
 *  Control is transferred to the target of the `continue` statement.
 
 Because a `continue` statement unconditionally transfers control elsewhere, the end point of a `continue` statement is never reachable.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> Translation of a *continue_statement* to a query expression tree produces a compile-time error. When converted to a generalized expression tree, it is translated into:
+>
+> ```csharp
+> Q.Continue(info)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.ContinueInfo(default(Q.Flags), label)
+> ```
+>
+> where `label` is a variable corresponding to the break label introduced by the closest parent *loop_statement* using the steps described in [Labeled statements](#labeled-statements).
+>
+> Note that this design can enable continuing a loop other than the closest parent *loop_statement*.
 
 ### The goto statement
 
@@ -989,6 +1363,68 @@ A `goto` statement is executed as follows:
 
 Because a `goto` statement unconditionally transfers control elsewhere, the end point of a `goto` statement is never reachable.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> Translation of a *goto_statement* to a query expression tree produces a compile-time error. When converted to a generalized expression tree, it is translated into:
+>
+> ```csharp
+> Q.Goto(info)
+> ```
+>
+> if the *goto_statement* is of the form
+>
+> ```antlr
+> 'goto' identifier ';'
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.GotoInfo(default(Q.Flags), label)
+> ```
+>
+> where `label` is a variable representing the label introduced by the steps described in [Labeled statements](#labeled-statements), or into
+>
+> ```csharp
+> Q.GotoCase(info, expr)
+> ```
+>
+> if the *goto_statement* is of the form `goto case c`
+>
+> ```antlr
+> 'goto' 'case' constant_expression ';'
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.GotoCaseInfo(default(Q.Flags), label)
+> ```
+>
+> where `constExpr` is an expression constructed by converting the *constant_expression* `c` to an expression tree, if the type of `c` matches the governing type of the parent switch statement, or by converting the expression `(T)(c)` where `T` is the governing type, otherwise. The introduced cast expression, if any, is classified as compiler-generated and represents the user-defined implicit conversion ([User-defined conversions](conversions.md#user-defined-conversions)) to a supported governing type.
+>
+> Furthermore, `label` is a variable representing the label associated with the *switch_label* containing the *constant_expression*, introduced by the steps described in [Labeled statements](#labeled-statements).
+>
+> Otherwise, it is translated into
+>
+> ```csharp
+> Q.GotoDefault(info)
+> ```
+>
+> if the *goto_statement* is of the form
+>
+> ```antlr
+> 'goto' 'default' ';'
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.GotoDefaultInfo(default(Q.Flags), label)
+> ```
+>
+> where `label` is a variable representing the label associated with the *switch_section* containing the `default` *switch_label*, introduced by the steps described in [Labeled statements](#labeled-statements).
+
 ### The return statement
 
 The `return` statement returns control to the current caller of the function in which the `return` statement appears.
@@ -1015,6 +1451,29 @@ A `return` statement is executed as follows:
 *  If the containing function is an async function, control is returned to the current caller, and the result value, if any, is recorded in the return task as described in ([Enumerator interfaces](classes.md#enumerator-interfaces)).
 
 Because a `return` statement unconditionally transfers control elsewhere, the end point of a `return` statement is never reachable.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> Translation of a *return_statement* to a query expression tree produces a compile-time error. When converted to a generalized expression tree, it is translated into
+>
+> ```csharp
+> Q.Return(info, expr)
+> ```
+>
+> if the *return_statement* has an *expression*, where `expr` is an expression constructed from converting *expression* to an expression tree, or
+>
+> ```csharp
+> Q.Return(info)
+> ```
+>
+> otherwise, where `info` is
+>
+> ```csharp
+> Q.ThrowInfo(default(Q.Flags))
+> ```
+>
+> ***TODO***
+> * Should this node also include a reference to a label introduced by the containing anonymous function expression?
 
 ### The throw statement
 
@@ -1049,6 +1508,29 @@ When an exception is thrown, control is transferred to the first `catch` clause 
    * If the current function is async and void-returning, the synchronization context of the current thread is notified as described in [Enumerable interfaces](classes.md#enumerable-interfaces).
 
 *  If the exception processing terminates all function member invocations in the current thread, indicating that the thread has no handler for the exception, then the thread is itself terminated. The impact of such termination is implementation-defined.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> Translation of a *throw_statement* to a query expression tree produces a compile-time error. When converted to a generalized expression tree, it is translated into
+>
+> ```csharp
+> Q.Throw(info, expr)
+> ```
+>
+> if the *throw_statement* has an *expression*, where `expr` is an expression constructed from converting *expression* to an expression tree, or
+>
+> ```csharp
+> Q.Throw(info)
+> ```
+>
+> otherwise, where `info` is
+>
+> ```csharp
+> Q.ThrowInfo(default(Q.Flags))
+> ```
+>
+> ***TODO***
+> * Note that adding the C# 7 *throw_expression* should be easy by introducing a new `ThrowInfo` overload that has a `Type` parameter. Expression tree libraries can make that overload of `ThrowInfo` return a different type, which influences overload resolution for the parent `Throw` invocation, which on its turn can return a different type to distinguish the expression variant from the statement variant (if that is desirable for some expression tree library).
 
 ## The try statement
 
@@ -1182,6 +1664,131 @@ The end point of a `try` statement is reachable if both of the following are tru
 *  The end point of the `try` block is reachable or the end point of at least one `catch` block is reachable.
 *  If a `finally` block is present, the end point of the `finally` block is reachable.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> Translation of a *try_statement* to a query expression tree produces a compile-time error. When converted to a generalized expression tree, the following steps are taken.
+>
+> ### Convert `try` and `finally` blocks
+>
+> Construct an expression `bodyExpr` by converting the *block* immediately following the `try` keyword to an expression tree. Next, construct an expression `finallyExpr` by converting the *block* immediately following the `finally` keyword to an expression tree, if it exists.
+>
+> ### Convert `catch` clauses
+>
+> Then, construct expressions `catchExpr_i` (where `1 <= i <= N`, where `N` is the number of *catch_clause*s) by translating each *catch_clause* as follows.
+>
+> ```antlr
+> catch_clause
+>     : 'catch' exception_specifier? exception_filter?  block
+>     ;
+>
+> exception_specifier
+>     : '(' type identifier? ')'
+>     ;
+> 
+> exception_filter
+>     : 'when' '(' expression ')'
+>     ;
+> ```
+>
+> If an *exception_specifier* is present, construct an expression `type` of type `Type` representing the *type* in the *exception_specifier*. Furthermore, if an *identifier* is specified in the *exception_specifier*, obtain a variable `caughtExceptionVar` by following the translation steps for local variables ([Local variables](variables.md#local-variables)). For example, applying these rules to
+>
+> ```csharp
+> catch (Exception ex)
+> ```
+>
+> will result in the construction of the following statement
+>
+> ```csharp
+> var t = Q.Variable(Q.VariableInfo(default(Q.Flags), typeof(Exeption), "ex"));
+> ```
+>
+> where `t` is a compiler-generated identifier that is otherwise invisible and is referred to as `caughtExceptionVar` in the remainder of this section.
+>
+> The variable declared in the *exception_specifier* remains in scope for the expression tree conversion steps of the *block* and the *exception_filter*, if it exists. That is, any use site of the variable will be translated to `caughtExceptionVar`, referring to the variable introduces here.
+>
+> Next, construct an expression `catchBlockExpr` by converting the *block* to an expression tree, and construct an expression `filterExpr` by converting the *exception_filter* to an expression tree, if it exists.
+>
+> An expression representing the catch clause is then constructed using the following decision tree
+>
+> * If an *exception_specifier* is present *and* has an *identifier*
+>   * If an *exception_filter* is present, translate to
+>     ```csharp
+>     Q.CatchClause(info, caughtExceptionVar, filterExpr, catchBlockExpr)
+>     ```
+>   * else, translate to
+>     ```csharp
+>     Q.CatchClause(info, caughtExceptionVar, catchBlockExpr)
+>     ```
+> * else
+>   * If an *exception_filter* is present, translate to
+>     ```csharp
+>     Q.CatchClause(info, filterExpr, catchBlockExpr)
+>     ```
+>   * else, translate to
+>     ```csharp
+>     Q.CatchClause(info, catchBlockExpr)
+>     ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.CatchClauseInfo(default(Q.Flags), type)
+> ```
+>
+> Note that we retain syntactic lexical order in expression tree factory method invocations.
+>
+> Finally, if `N > 0`, combine all `catchExpr_i` expression tree fragments by constructing an expression `catchClauses` from
+>
+> ```csharp
+> Q.CatchClauses(info, catchExpr_1, ..., catchExpr_N)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.CatchClausesInfo(default(Q.Flags))
+> ```
+>
+> ***TODO***
+> * Determine a design stance on API evolution. While we can start with lexical order, it may break down if a node evolves to have new child nodes and an ambiguity arises.
+> * Determine whether `type` belongs on `CatchClause` or on `CatchClauseInfo`. Note that reflection members are often on info nodes, e.g. for `Add`, `New`, `Call`, etc.
+>    * On stance is that if it shows up in syntax, it should be on the node itself and not the "info". Then `Call`, rather than `CallInfo`, should have a `MethodInfo` (or a dynamic binder object). But for nodes like `Add` the bound method is not visible in syntax.
+>    * Another stance is that the nodes modulo "info" objects capture the shape of the tree modulo any bound symbols. That is, "info" objects carry semantic info (which never refer to tree nodes, but may refer to other "info" nodes; `ScopeInfo` violates this layering right now), which in practice is reflection.
+>      * An expression tree library could easily perform type erasure by rewriting "info" nodes while leaving the rest of the tree shape the same (e.g. by changing them for `string`-based nodes to refer to types or members by name).
+>      * Discovering all binding information would also be very easy if an expression tree library has a visitor that visits all "info" nodes.
+>    * Or we could flatten the hierarchy and do away with "info" nodes, though often nodes are structurally the same (reflective of the grammar of the language) but are semantically bound in a different manner. By having "info" nodes, variations in syntactic shape and variations in semantic binding info never clash and don't lead to a cartesian product of overloads. It also allows for reuse of "info" nodes (e.g. `ConvertInfo`).
+>
+> ### Construct the expression tree
+>
+> Conversion to an expression tree proceeds as follows, using the expressions constructed in the sections above.
+>
+> If *try_statement* contains a *finally_clause* but no *catch_clause*s, it is translated into
+>
+> ```csharp
+> Q.Try(info, bodyExpr, finallyExpr)
+> ```
+>
+> or, if the *try_statement* has one or more *catch_clause*s but no *finally_clause*, it is translated into
+>
+> ```csharp
+> Q.Try(info, bodyExpr, catchClauses)
+> ```
+>
+> or, if the *try_statement* has one or more *catch_clause*s and a *finally_clause*, it is translated into
+>
+> ```csharp
+> Q.Try(info, bodyExpr, catchClauses, finallyExpr)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.TryInfo(default(Q.Flags))
+> ```
+>
+> ***TODO***
+> * Note that the presence of a `TryInfo` node with `Q.Flags` can also come in handy for expression tree libraries when they perform their own lowering steps. For example, translating a `using` statement into a `try` statement could use `Q.Flags.CompilerGenerated` passed to `TryInfo`.
+
 ## The checked and unchecked statements
 
 The `checked` and `unchecked` statements are used to control the ***overflow checking context*** for integral-type arithmetic operations and conversions.
@@ -1199,6 +1806,38 @@ unchecked_statement
 The `checked` statement causes all expressions in the *block* to be evaluated in a checked context, and the `unchecked` statement causes all expressions in the *block* to be evaluated in an unchecked context.
 
 The `checked` and `unchecked` statements are precisely equivalent to the `checked` and `unchecked` operators ([The checked and unchecked operators](expressions.md#the-checked-and-unchecked-operators)), except that they operate on blocks instead of expressions.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> Translation of a *checked_statement* or an *unchecked_statement* to a query expression tree produces a compile-time error.
+>
+> For purposes of conversion to a generalized expression tree, `Q.Flags.CheckedContext` flags are passed to generalized expression tree factory invocations for expressions occurring within a `checked` context, and a node is constructed to retain the syntactic structure of the original code.
+>
+> First, construct a `blockExpr` expression representing the translation of the block to an expression tree. Conversion to an expression tree then proceeds as follows.
+>
+> A *checked_statement* is translated into
+>
+> ```csharp
+> Q.Checked(info, blockExpr)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.CheckedInfo(default(Q.Flags))
+> ```
+>
+> An *unchecked_statement* is translated into
+>
+> ```csharp
+> Q.Unchecked(info, blockExpr)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.UncheckedInfo(default(Q.Flags))
+> ```
 
 ## The lock statement
 
@@ -1250,6 +1889,36 @@ class Cache
     }
 }
 ```
+
+> __Expression Tree Conversion Translation Steps__
+>
+> Translation of a *lock_statement* to a query expression tree produces a compile-time error. When converted to a generalized expression tree, conversion proceeds as follows.
+>
+> First, construct an expression `expr` representing the conversion of the lock object expression to an expression tree, and construct an expression `body` representing the conversion of the embedded statement to an expression tree. The lock statement is then translated into
+>
+> ```csharp
+> Q.Lock(info, expr, body)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.LockInfo(default(Q.Flags), enter, exit)
+> ```
+>
+> where `enter` and `exit` are expressions of type `MethodInfo` representing the `System.Threading.Monitor.Enter` and `System.Threading.Monitor.Exit` methods, respectively.
+>
+> Note that information about the bound methods is passed to the `LockInfo` factory method. This reduces the burden on the expression tree library to locate these methods using reflection. Furthermore, the use of a `LockInfo` factory method enables alternative bindings should the specification of lock statements be relaxed in the future, at which point overloads could be added.
+>
+> ***TODO***
+> * Specifying `enter` and `exit` is subject to debate. Does expression tree library convenience (of having these methods passed) outweigh information about lowering steps getting into expression nodes?
+>   * Many nodes carry information about binding, e.g. method calls. In these places, the information is required to capture the bound target unambiguously.
+>   * `Enter` and `Exit` are assumed to be built-in here, but strictly speaking the translation described in the specification does not specify the method signature of the target methods, nor whether it can bind to a `System.Threading.Monitor` type declared in a place other than the BCL.
+>     * The binding target is not unambiguous according to the letter of the specification.
+>     * If `Enter` and `Exit` were to have many overloads, the translation steps here imply that overload resolution is used to find the best one. This is already the case, because `Enter` has two overloads.
+>       * Do we want the burden to be put on the expression tree libraries to pick the right one (using brittle reflection logic)?
+>       * Is it possible that future versions of the BCL have better overloads for these methods, in particular `Enter`? For example, an addition of `void Enter<T>(T, ref bool)` would just bind fine for any `T` that is not equal to `object`.
+>   * My bias is towards keeping these methods here. Less work for the expression library, more flexibility going forward, the specification is clear about the binding to these methods, and the way things are described in the specification implies there's regular overload resolution and binding for method invocation expressions targeting these methods.
 
 ## The using statement
 
@@ -1367,6 +2036,28 @@ class Test
 
 Since the `TextWriter` and `TextReader` classes implement the `IDisposable` interface, the example can use `using` statements to ensure that the underlying file is properly closed following the write or read operations.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> Translation of a *using_statement* to a query expression tree produces a compile-time error. When converted to a generalized expression tree, it is translated into:
+>
+> ```csharp
+> Q.Using(info, resourceExpr, stmtExpr)
+> ```
+>
+> where `resourceExpr` is an expression representing the translation of *resource_acquisition* to an expression tree, `stmtExpr` is an expression representing the translation of *embedded_statement* to an expression tree, and `info` is
+>
+> ```csharp
+> Q.UsingInfo(default(Q.Flags), convert)
+> ```
+>
+> where `convert` is an expression representing the conversion of the resource(s) to `IDisposable`, as described above, constructed using the `Q.ConvertInfo` factory as described in [Cast expressions](expression.md#cast-expressions). Note that this conversion may describe a dynamic conversion.
+>
+> ***TODO***
+> * C# 7 adds scoped locals to the bound node, due to declaration expressions. These would be passed to the `UsingInfo` factory method as a third argument supplied with the result of the `ScopeInfo` factory method.
+> * Lowering steps are left to the expression tree library, e.g. for purposes of expression tree evaluation.
+>   * The C# compiler performs some non-trivial optimizations for structs using `constrained` virtual calls which are covered by the specification stating "*An implementation is permitted to implement a given using-statement differently, e.g. for performance reasons, as long as the behavior is consistent with the above expansion.*".
+>   * Should any information about the suggested lowering steps make it into the expression tree nodes? Likely not, given that the spec is non-prescriptive about any such details beyond the expansions to `try..finally..` constructs.
+
 ## The yield statement
 
 The `yield` statement is used in an iterator block ([Blocks](statements.md#blocks)) to yield a value to the enumerator object ([Enumerator objects](classes.md#enumerator-objects)) or enumerable object ([Enumerable objects](classes.md#enumerable-objects)) of an iterator or to signal the end of the iteration.
@@ -1437,3 +2128,102 @@ A `yield break` statement is executed as follows:
 *  Control is returned to the caller of the iterator block. This is either the `MoveNext` method or `Dispose` method of the enumerator object.
 
 Because a `yield break` statement unconditionally transfers control elsewhere, the end point of a `yield break` statement is never reachable.
+
+> __Expression Tree Conversion Translation Steps__
+>
+> Translation of a *yield_statement* to a query expression tree produces a compile-time error.
+>
+> When a `yield return e;` statement is converted to a generalized expression tree, it is translated into:
+>
+> ```csharp
+> Q.YieldReturn(info, expr)
+> ```
+>
+> where `expr` is an expression representing the translation of `(T)(e)` to an expression tree if a non-trivial implicit conversion of `e` to yield type `T` ([Yield type](classes.md#yield-type)) is required, where the cast expression is classified as compiler-generated, or representing the translation of `e` to an expression tree otherwise, and `info` is
+>
+> ```csharp
+> Q.YieldReturnInfo(default(Q.Flags))
+> ```
+>
+> When a `yield break;` statement is converted to a generalized expression tree, it is translated into:
+>
+> ```csharp
+> Q.YieldBreak(info)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.YieldBreakInfo(default(Q.Flags))
+> ```
+>
+> ***TOD***:
+> * Anonymous function expressions do not support iterator blocks today; this whole section is predicated on a lift of this restriction.
+> * If iterators are supported, we have a couple more things to evaluate:
+>   * Would builders exists, similar to `async` methods with task-like types? If so, the `Lambda` factory would likely accept an `IteratorLambdaInfo` for its `info` parameter, which refers to the builder type.
+>   * Should `info` nodes on `yield` statements carry any information about the enumerator (or enumerator-like type) being constructed? It doesn't seem like it; all this info would likely go on the lambda parent.
+>   * Should the implicit conversion of a `yield return` expression operand be represented as a `ConvertInfo` child to `YieldReturnInfo`? Likely not; we don't do that either for the rhs of an assignment (and only for things such as "left conversions").
+>   * Because `yield` statements perform control flow, should their info objects be parameterized on some type of "anchor" that can be used to traverse to the parent iterator block? This is similar to the use of label target nodes on `break` and `continue`.
+>     * Note that use of references between `info` nodes makes the final expression "tree" really an object graph. This is no different from the the existing query expression trees where `Parameter` occurs both in declaration and use sites. Either way, we should classify leaf nodes to make them explicit (variables, labels, others?).
+
+## Scopes in expression trees
+
+Statements that introduce a scope for local variables are converted to expression trees using a ***scope info*** expression tree node.
+
+When a statement establishes a scope for one or more local variables, each variable (in lexical order based on the declarations of these variables) is translated into an expression tree as described in [Local variables](variables.md#local-variables). This results in the introduction of local variables `varExpr_1` to `varExpr_N` that have been assigned from `Q.Variable` invocations.
+
+A scope info expression tree node is then constructed from
+
+```csharp
+Q.ScopeInfo(varExpr_1, ..., varExpr_N)
+```
+
+For example, consider the following block:
+
+```csharp
+{
+    Console.WriteLine(1);
+    int x;
+    Console.WriteLine(2);
+    x = 3;
+    Console.WriteLine(x);
+    int y = 4;
+    Console.WriteLine(y);
+}
+```
+
+This block declares variables `x` and `y`, in that order. These variables are translated to expression trees using two local variables:
+
+```csharp
+var t0 = Q.Variable(Q.VariableInfo(default(Q.Flags), typeof(int), "x"));
+var t1 = Q.Variable(Q.VariableInfo(default(Q.Flags), typeof(int), "y"));
+```
+
+where `t0` and `t1` are compiler-generated identifiers that are otherwise invisible. A scope info for the block is then constructed:
+
+```csharp
+var t2 = Q.ScopeInfo(t0, t1);
+```
+
+where `t2` is a compiler-generated identifier that is otherwise invisible. Conversion of the block to an expression tree then proceeds as follows:
+
+```csharp
+Q.Block(
+    Q.BlockInfo(default(Q.Flags), t2),
+    Q.StatementList(
+        Q.Call(...),
+        Q.VariableDeclaration(t0),
+        Q.Call(...),
+        Q.Assign(...),
+        Q.Call(...),
+        Q.VariableDeclaration(t1, ...)
+        Q.Call(...)
+    )
+)
+```
+
+This translation is similar to C-style variable declarations at the top of a block, but retains the lexical structure of the program.
+
+Expression tree nodes representing variables can be referenced in various places, including scope info nodes, lambda expression parameter lists, variable declaration nodes, and expressions.
+
+It is left to expression tree libraries to ensure that some form of identity exists to associate the various use sites of `Q.Variable` and `Q.Parameter` nodes, if the expression tree library has such a requirement. The most straightforward choice is the use of reference equality, though the language specification does not rely on this. For example, variable nodes could be implemented as structs encapsulating some notion of identity.
