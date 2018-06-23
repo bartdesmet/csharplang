@@ -17,7 +17,7 @@ This proposal suggests a collection initialization builder pattern that is suppo
 ## Detailed design
 [design]: #detailed-design
 
-In the section on [Method parameters](classes.md#method-parameters), the grammar production for *parameter_array* is altered as follows:
+In the section on [Method parameters](../spec/classes.md#method-parameters), the grammar production for *parameter_array* is altered as follows:
 
 ```antlr
 parameter_array
