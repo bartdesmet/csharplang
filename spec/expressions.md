@@ -1436,6 +1436,113 @@ The *member_access* is evaluated and classified as follows:
       * Otherwise, the result is an event access with an associated instance expression of `E`.
 *  Otherwise, an attempt is made to process `E.I` as an extension method invocation ([Extension method invocations](expressions.md#extension-method-invocations)). If this fails, `E.I` is an invalid member reference, and a binding-time error occurs.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> A *member_access* of the form `E.I` is converted to an expression tree in the following cases:
+>
+> * if `I` identifies an instance property or an instance field, and `E` represents an expression, which may be of type `dynamic`, or,
+> * if `I` identifies a static property or a static field, and `E` represents a type `T`.
+>
+> In all other cases, the *member_access* is not represented as a separate expression tree, but is translated as part of an ancestor expression or statement. For instance, if the parent expression is a method invocation, the *member_access* is deconstructed into an instance expression (if the method invocation is bound to an instance method) and a `MethodInfo` representing the bound method or a dynamic binder object.
+>
+> Expression tree conversion proceeds as follows.
+>
+> ### Static property access
+>
+> If `I` represents a static property, construct an expression `method` of type `MethodInfo` representing the `get` accessor of the property. When converted to a query expression tree, the *member_access* is translated into:
+>
+> ```csharp
+> Expression.Property((Expression)null, method)
+> ```
+>
+> When converted to a generalized expression tree, the *member_access* is translated into:
+>
+> ```csharp
+> Q.MemberAccess(info)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.MemberAccessInfo(default(Q.Flags), method)
+> ```
+>
+> ### Static field access
+>
+> If `I` represents a static field, construct an expression `field` of type `FieldInfo` representing the field. When converted to a query expression tree, the *member_access* is translated into:
+>
+> ```csharp
+> Expression.Field((Expression)null, field)
+> ```
+>
+> When converted to a generalized expression tree, the *member_access* is translated into:
+>
+> ```csharp
+> Q.MemberAccess(info)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.MemberAccessInfo(default(Q.Flags), field)
+> ```
+>
+> ***TODO***
+> * Describe behavior for `const` fields.
+>
+> ### Instance property access
+>
+> If `I` represents an instance property, and `E` is of type `dynamic`, a compile-time error occurs. Otherwise, construct an expression `expr` by converting `E` to an expression tree, and construct an expression `method` of type `MethodInfo` representing the `get` accessor of the property. When converted to a query expression tree, the *member_access* is translated into:
+>
+> ```csharp
+> Expression.Property(expr, method)
+> ```
+>
+> When converted to a generalized expression tree, the *member_access* is translated into:
+>
+> ```csharp
+> Q.MemberAccess(info, expr)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.MemberAccessInfo(default(Q.Flags), binder)
+> ```
+>
+> if `E` is of type `dynamic` and where `binder` is an expression of type `Microsoft.CSharp.RuntimeBinder.CallSiteBinder` representing the dynamic operation, or
+>
+> ```csharp
+> Q.MemberAccessInfo(default(Q.Flags), method)
+> ```
+>
+> otherwise.
+>
+> ***TODO***
+> * Describe quirk https://github.com/dotnet/roslyn/issues/4471 for query expression trees.
+>
+> ### Instance field access
+>
+> If `I` represents an instance field, construct an expression `expr` by converting `E` to an expression tree, and construct an expression `field` of type `FieldInfo` representing the field. When converted to a query expression tree, the *member_access* is translated into:
+>
+> ```csharp
+> Expression.Field(expr, field)
+> ```
+>
+> When converted to a generalized expression tree, the *member_access* is translated into:
+>
+> ```csharp
+> Q.MemberAccess(info, expr)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.MemberAccessInfo(default(Q.Flags), field)
+> ```
+>
+> Note that a *member_access* applied to an expression `E` of type `dynamic` is classified as a property access. Therefore, this section does not cover the dynamically bound case which is covered in the section on instance property access.
+
 #### Identical simple names and type names
 
 In a member access of the form `E.I`, if `E` is a single identifier, and if the meaning of `E` as a *simple_name* ([Simple names](expressions.md#simple-names)) is a constant, field, property, local variable, or parameter with the same type as the meaning of `E` as a *type_name* ([Namespace and type names](basic-concepts.md#namespace-and-type-names)), then both possible meanings of `E` are permitted. The two possible meanings of `E.I` are never ambiguous, since `I` must necessarily be a member of the type `E` in both cases. In other words, the rule simply permits access to the static members and nested types of `E` where a compile-time error would otherwise have occurred. For example:
