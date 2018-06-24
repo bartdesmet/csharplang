@@ -321,6 +321,20 @@ Two identifiers are considered the same if they are identical after the followin
 
 Identifiers containing two consecutive underscore characters (`U+005F`) are reserved for use by the implementation. For example, an implementation might provide extended keywords that begin with two underscores.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> When used in an expression tree, an identifier is converted to an expression of type `string` representing the identifier, after applying the following transformations, in order:
+>
+> * The prefix "`@`", if used, is removed.
+> * Each *unicode_escape_sequence* is transformed into its corresponding Unicode character.
+> * Any *formatting_character*s are removed.
+>
+> Note that identifiers are only converted to their string representation for use in an expression tree when they occur in a declaration site for a variable ([Variables](variables.md)), a label ([Labeled statements](statements.md#labeled-statements)), or a dynamically bound context when constructing a binder ([Method invocations](expressions.md#method-invocations) and [Member access](expressions.md#member-access)). In all other cases, identifiers are bound prior to expression tree conversion.
+>
+> * When bound to a local or a parameter declared within the expression tree, the variable holding the bound local or parameter declaration is used.
+> * When bound to a label, the variable holding the bound label declaration is used.
+> * When bound to a type or member, an expression of type `System.Type` or of type `System.Reflection.MemberInfo` (or a derived class) is used.
+
 ### Keywords
 
 A ***keyword*** is an identifier-like sequence of characters that is reserved, and cannot be used as an identifier except when prefaced by the `@` character.

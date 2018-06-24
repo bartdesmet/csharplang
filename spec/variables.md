@@ -89,10 +89,10 @@ For the purpose of definite assignment checking, a value parameter is considered
 > T p
 > ```
 >
-> is translated to
+> is translated by first constructing an expression `name` of type `string` by converting the identifier `p` to an expression tree ([Identifiers](lexical-structure.md#identifiers)), and defining a variable `t` as
 >
 > ```csharp
-> var t = Expression.Parameter(typeof(T), "p");
+> var t = Expression.Parameter(typeof(T), name);
 > ```
 >
 > when converted to a query expression tree, or to
@@ -104,7 +104,7 @@ For the purpose of definite assignment checking, a value parameter is considered
 > when converted to a generalized expression tree, where `info` is
 >
 > ```csharp
-> Q.ParameterInfo(flags, typeof(T), "p")
+> Q.ParameterInfo(flags, typeof(T), name)
 > ```
 >
 > where `flags` is `Q.Flags.CompilerGenerated` if the parameter is compiler-generated, or `default(Q.Flags)` otherwise.
@@ -151,10 +151,10 @@ Within an instance method or instance accessor of a struct type, the `this` keyw
 > ref T p
 > ```
 >
-> is translated to
+> is translated by first constructing an expression `name` of type `string` by converting the identifier `p` to an expression tree ([Identifiers](lexical-structure.md#identifiers)), and defining a variable `t` as
 >
 > ```csharp
-> var t = Expression.Parameter(typeof(T).MakeByRefType(), "p");
+> var t = Expression.Parameter(typeof(T).MakeByRefType(), name);
 > ```
 >
 > when converted to a query expression tree, or to
@@ -166,7 +166,7 @@ Within an instance method or instance accessor of a struct type, the `this` keyw
 > when converted to a generalized expression tree, where `info` is
 >
 > ```csharp
-> Q.ParameterInfo(flags, typeof(T).MakeByRefType(), "p")
+> Q.ParameterInfo(flags, typeof(T).MakeByRefType(), name)
 > ```
 >
 > where `flags` is the bitwise `|` combination of `Q.Flags.IsRef` and:
@@ -224,10 +224,10 @@ Within an instance constructor of a struct type, the `this` keyword behaves exac
 > out T p
 > ```
 >
-> is translated to
+> is translated by first constructing an expression `name` of type `string` by converting the identifier `p` to an expression tree ([Identifiers](lexical-structure.md#identifiers)), and defining a variable `t` as
 >
 > ```csharp
-> var t = Expression.Parameter(typeof(T).MakeByRefType(), "p");
+> var t = Expression.Parameter(typeof(T).MakeByRefType(), name);
 > ```
 >
 > when converted to a query expression tree, or to
@@ -239,7 +239,7 @@ Within an instance constructor of a struct type, the `this` keyword behaves exac
 > when converted to a generalized expression tree, where `info` is
 >
 > ```csharp
-> Q.ParameterInfo(flags, typeof(T).MakeByRefType(), "p")
+> Q.ParameterInfo(flags, typeof(T).MakeByRefType(), name)
 > ```
 >
 > where `flags` is `Q.Flags.IsOut`.
@@ -293,7 +293,7 @@ The storage referred to by a local reference variable is reclaimed independently
 >
 > Use sites of local variables are supported in query expression trees and solely involve accessing captured outer variables (see [Captured outer variables](expressions.md#captured-outer-variables)) because query expression trees can not declare local variables.
 >
-> Declarations of local variables are converted to generalized expression trees as follows. Let `name` be an expression of type `string` representing the identifier of the variable, and let `type` be an expression of type `Type` representing the type of the variable, which may have been inferred (for instance, when `var` was used to declare the variable). If the type of the variable is `dynamic`, the `type` expression will represent `typeof(object)`.
+> Declarations of local variables are converted to generalized expression trees as follows. First construct an expression `name` of type `string` by converting the identifier `p` to an expression tree ([Identifiers](lexical-structure.md#identifiers)), and construct an expression `type` of type `Type` representing the type of the variable, which may have been inferred (for instance, when `var` was used to declare the variable). If the type of the variable is `dynamic`, the `type` expression will represent `typeof(object)`.
 >
 > Expression tree conversion of a local variable declaration then results in
 >
