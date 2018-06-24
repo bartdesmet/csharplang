@@ -1027,6 +1027,142 @@ The end point of a `for` statement is reachable if at least one of the following
 *  The `for` statement contains a reachable `break` statement that exits the `for` statement.
 *  The `for` statement is reachable and a *for_condition* is present and does not have the constant value `true`.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> Translation of a *for_statement* to a query expression tree produces a compile-time error. When converted to a generalized expression tree, the following steps are taken.
+>
+> ### The initializer
+>
+> The *for_initializer*, if it exists,
+>
+> ```antlr
+> for_initializer
+>     : local_variable_declaration
+>     | statement_expression_list
+>     ;
+> ```
+>
+> is converted to an expression tree by constructing an expression `initExpr`
+>
+> ```csharp
+> Q.ForInitializer(info, expr)
+> ```
+>
+> where `expr` is the result of converting the *local_variable_declaration* or the *statement_expression_list* to an expression tree, and where `info` is
+>
+> ```csharp
+> Q.ForInitializerInfo(default(Q.Flags))
+> ```
+>
+> ### The condition expression
+>
+> The *for_condition*, if it exists,
+>
+> ```antlr
+> for_condition
+>     : boolean_expression
+>     ;
+> ```
+>
+> is converted to an expression tree by constructing an expression `conditionExpr`
+>
+> ```csharp
+> Q.ForCondition(info, expr)
+> ```
+>
+> where `expr` is the result of converting the *boolean_expression* to an expression tree, and where `info` is
+>
+> ```csharp
+> Q.ForConditionInfo(default(Q.Flags))
+> ```
+>
+> ***TODO***
+> * Given that we don't always compile-time evaluate constant expressions to reduce nodes to `Q.Constant` (depending on flags on the builder type), it may be useful to still provide access to the constant value. It seems this is just one of the many annotations that could be stuff on "info" nodes. For this node, this would be particularly useful to analyze the loop condition value.
+>
+> ### The iterator
+>
+> The *for_iterator*, if it exists,
+>
+> ```antlr
+> for_iterator
+>     : statement_expression_list
+>     ;
+> ```
+>
+> is converted to an expression tree by constructing an expression `iterExpr`
+>
+> ```csharp
+> Q.ForIterator(info, expr)
+> ```
+>
+> where `expr` is the result of converting the *statement_expression_list* to an expression tree, and where `info` is
+>
+> ```csharp
+> Q.ForIteratorInfo(default(Q.Flags))
+> ```
+>
+> ### Statement expression lists
+>
+> The *for_initializer* and *for_iterator* can be a *statement_expression_list*
+>
+> ```antlr
+> statement_expression_list
+>     : statement_expression (',' statement_expression)*
+>     ;
+> ```
+>
+> which is translated by converting each *statement_expression* to an expression tree `stmtExpr_i` (for `1 <= i <= N`), in lexical order, and combining the resulting expressions into
+>
+> ```csharp
+> Q.StatementExpressionList(info, stmtExpr_1, ..., stmtExpr_N)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.StatementExpressionListInfo(default(Q.Flags))
+> ```
+>
+> ### Constructing the expression tree
+>
+> it is translated into
+>
+> ```csharp
+> Q.For(info, initExpr, conditionExpr, iterExpr, stmtExpr)
+> ```
+>
+> where `initExpr` is the result of translating *for_initializer* to an expression tree if it exists, or a `default` literal otheriwse, `conditionExpr` is the result of translating *for_condition* to an expression tree if it exists, or a `default` literal otherwise, `iterExpr` is the result of translating *for_iterator* if it exists, or a `default` literal otherwise, and `stmtExpr` is the result of translating *embedded_statement* to an expression tree, and `info` is
+>
+> ```csharp
+> Q.ForInfo(default(Q.Flags), scope)
+> ```
+>
+> if no `break` or `continue` statements exist within the body of the iteration statement, targeting the current iteration statement, or
+>
+> ```csharp
+> Q.ForInfo(default(Q.Flags), scope, breakLabel)
+> ```
+>
+> if a `break` statement exists but no `continue` statement exists within the body of the iteration statement, targeting the current iteration statement, or
+>
+> ```csharp
+> Q.ForInfo(default(Q.Flags), scope, breakLabel, continueLabel)
+> ```
+>
+> otherwise, where `scope` is an expression representing the local variables declared by a *for_initializer*, obtained using the rules in [Scopes in expression trees](#scopes-in-expression-trees), and `breakLabel` and `continueLabel` refer to variables holding expression tree nodes representing compiler-generated labels according to the rules described in [Labeled statements](#labeled-statements). If no `break` statement exists within the body of the iteration statement, targeting the current iteration statement, `breakLabel` will be the `default` literal instead.
+>
+> The rationale of these overloads is to allow for efficient expression tree libraries that can detect control flow behavior associated with the loop, without having to perform complex analysis of the iteration statement body. Note that libraries can implement `ForInfo` using two optional parameters rather than having three distinct overloads. For example:
+>
+> ```csharp
+> static ForInfo ForInfo(Flags flags, ScopeInfo scope, LabelInfo @break = default, LabelInfo @continue = default) => ...
+> ```
+>
+> ***TODO***
+> * C# 7 adds scoped (inner) locals to the bound node, due to declaration expressions. These would be passed to the `ForInfo` factory method as a fifth argument supplied with the result of the `ScopeInfo` factory method.
+>   * We should review the API design for future proofing. The C# 6.0 specification shown above calls for only one scope parameter (for out locals, as defined higher up). This is passed as the second argument, in a way because it's very common to have such variables (e.g. the idiomatic `for (int i = 0; i < n; i++)` construct), while it's less common to have `break` and `continue`. We treat the scope as required, even though it could be empty. Where does that leave us when inner locals are added in C# 7.0, and if we decide we indeed want to keep scope info around (to help expression tree libraries discover these scopes rather than having to reconstruct them). Would we add the additional scope parameter at the end, or insert it (which often leads to worries about overload resolution)? Adding at the end could work, but leads to:
+>     * Growing API inconsistency over time, which we may have to live with.
+>     * A need to come up with a plan for expressing missing information, e.g. if no `break` label is present. The use of target-typed `default` literals is the most natural choice, but limits overload flexibility. Maybe there's always only one overload for an `Info` method? Variants that are well-knownand differentiable from the specification can also use different names (e.g. `DynamicAddInfo` or `AsyncLambdaInfo`).
+
 ### The foreach statement
 
 The `foreach` statement enumerates the elements of a collection, executing an embedded statement for each element of the collection.
