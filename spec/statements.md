@@ -278,7 +278,7 @@ In addition to the reachability provided by normal flow of control, a labeled st
 > where `stmtExpr` is the result of converting *statement* to an expression tree, and `info` is
 >
 > ```csharp
-> Q.LabeledStatement(default(Q.Flags), label)
+> Q.LabeledStatementInfo(default(Q.Flags), label)
 > ```
 >
 > where `label` is a variable holding a node representing the label declaration, as follows:
@@ -459,7 +459,7 @@ Execution of an *expression_statement* evaluates the contained expression and th
 > where `expr` is the result of converting the *statement_expression* to an expression tree, and `info` is
 >
 > ```csharp
-> Q.EmptyInfo(default(Q.Flags))
+> Q.StatementExpressionInfo(default(Q.Flags))
 > ```
 >
 > Note that *statement_expression*s use `Q.Flags.ResultDiscarded` to denote that the result of evalating the expression is discarded. This information can be used for dynamic binding and to improve expression tree evaluation without having to manually track when results are discarded. A good example of this is code generation for `x++` and `x--` where the result of evaluating `x` prior to performing the increment or decrement operation can be discarded. The `StatementExpression` node retains the syntactic isomorphism between the original code and the generated expression tree, and also acts as a conversion to `void`.
@@ -708,7 +708,7 @@ The end point of a `switch` statement is reachable if at least one of the follow
 >
 > Translation of a *switch_statement* to a query expression tree produces a compile-time error. When converted to a generalized expression tree, the following steps are taken.
 >
-> ### The `switch` expression
+> #### The `switch` expression
 >
 > Given a *switch_statement*
 >
@@ -720,13 +720,13 @@ The end point of a `switch` statement is reachable if at least one of the follow
 >
 > of the form `switch (e) ...`, construct an expression `switchExpr` by converting the switch expression `e` to an expression tree, if the type of the switch expression `e` matches the governing type, or by converting the expression `(T)(e)` where `T` is the governing type, otherwise. The introduced cast expression, if any, is classified as compiler-generated and represents the user-defined implicit conversion ([User-defined conversions](conversions.md#user-defined-conversions)) to a supported governing type.
 >
-> ### The `break` label
+> #### The `break` label
 >
 > Construct a variable `breakLabel` holding an expression tree node representing a compiler-generated label according to the rules described in [Labeled statements](#labeled-statements). This compiler-generated label acts as the target for a `break` statement ([The break statement](statements.md#the-break-statement)) that breaks out of the *switch_statement*.
 >
 > If the *switch_block* does not contain any *switch_section*s or none of the *switch_section*s contains a `break` statement ([The break statement](statements.md#the-break-statement)) that breaks out of the *switch_statement*, `breakLabel` is not constructed.
 >
-> ### The `switch` block
+> #### The `switch` block
 >
 > Construct a `switchBlockExpr` expression for the *switch_block*
 >
@@ -750,7 +750,7 @@ The end point of a `switch` statement is reachable if at least one of the follow
 >
 > and each `switchSectionExpr_i` expression (with `1 <= i <= N`) is constructed from the *switch_section*s that occur in the *switch_block*, in lexical order, if any exist, as described in the next section.
 >
-> ### The `switch` sections
+> #### The `switch` sections
 >
 > Construct each `switchSectionExpr_i` expression (with `1 <= i <= N`) from the `i`th *switch_section*
 >
@@ -772,7 +772,7 @@ The end point of a `switch` statement is reachable if at least one of the follow
 > Q.SwitchSectionInfo(default(Q.Flags))
 > ```
 >
-> ### The `case` and `default` labels
+> #### The `case` and `default` labels
 >
 > Construct a `labelsExpr` expression for all the *switch_label*s
 >
@@ -841,7 +841,7 @@ The end point of a `switch` statement is reachable if at least one of the follow
 >
 > Note that the *constant_expression* specified on a `case` label is evaluated at compile time to allow for comparison of its value to any of the `goto case` statements' *constant_expression*. The relationship between a `case` label and a `goto case` statement is established by sharing a label node in the resulting expression tree. However, the expression tree for *constant_expression* is retained as well (both on the `case` label and on any `goto case` statement), either in its compile-time evaluated form, or in its raw form if compile-time evaluation is suppressed in expression trees. This enables expression tree libraries to inspect the original expressions and enables them to perform a variety of analyses and manipulations.
 >
-> ### Constructing the expression tree
+> #### Constructing the expression tree
 >
 > Given the constituents built using the steps described in the previous sections, the expression tree for the *switch_statement* is constructed as follows:
 >
@@ -865,6 +865,7 @@ The end point of a `switch` statement is reachable if at least one of the follow
 >
 > ***TODO***
 > * C# 7 adds scoped locals to the bound node, due to declaration expressions. These would be passed to the `SwitchInfo` factory method as a third argument supplied with the result of the `ScopeInfo` factory method.
+> * Review the general stance of modeling optional nodes, such as the break label here. Having a redundant node may not be a big deal, but it incurs an allocation. Omitting redundant nodes should either consistently be done using overload "ladders" or be modeled using a `default` literal (reducing the number of overloads at the expense of having potentially many default values).
 
 ## Iteration statements
 
@@ -1059,7 +1060,7 @@ The end point of a `for` statement is reachable if at least one of the following
 >
 > Translation of a *for_statement* to a query expression tree produces a compile-time error. When converted to a generalized expression tree, the following steps are taken.
 >
-> ### The initializer
+> #### The initializer
 >
 > The *for_initializer*, if it exists,
 >
@@ -1082,7 +1083,7 @@ The end point of a `for` statement is reachable if at least one of the following
 > Q.ForInitializerInfo(default(Q.Flags))
 > ```
 >
-> ### The condition expression
+> #### The condition expression
 >
 > The *for_condition*, if it exists,
 >
@@ -1107,7 +1108,7 @@ The end point of a `for` statement is reachable if at least one of the following
 > ***TODO***
 > * Given that we don't always compile-time evaluate constant expressions to reduce nodes to `Q.Constant` (depending on flags on the builder type), it may be useful to still provide access to the constant value. It seems this is just one of the many annotations that could be stuff on "info" nodes. For this node, this would be particularly useful to analyze the loop condition value.
 >
-> ### The iterator
+> #### The iterator
 >
 > The *for_iterator*, if it exists,
 >
@@ -1129,7 +1130,7 @@ The end point of a `for` statement is reachable if at least one of the following
 > Q.ForIteratorInfo(default(Q.Flags))
 > ```
 >
-> ### Statement expression lists
+> #### Statement expression lists
 >
 > The *for_initializer* and *for_iterator* can be a *statement_expression_list*
 >
@@ -1151,7 +1152,7 @@ The end point of a `for` statement is reachable if at least one of the following
 > Q.StatementExpressionListInfo(default(Q.Flags))
 > ```
 >
-> ### Constructing the expression tree
+> #### Constructing the expression tree
 >
 > it is translated into
 >
@@ -1346,7 +1347,7 @@ the type of `n` is inferred to be `int`, the element type of `numbers`.
 >
 > to a query expression tree produces a compile-time error. When converted to a generalized expression tree, the following steps are taken.
 >
-> ### The collection expression
+> #### The collection expression
 >
 > The collection *expression* `x` is converted to an expression tree by constructing an expression `collectionExpr` as follows, where `X` is the type of *expression*, and `C` is the collection type as defined earlier.
 >
@@ -1354,13 +1355,13 @@ the type of `n` is inferred to be `int`, the element type of `numbers`.
 >
 > Otherwise, `collectionExpr` is the result of converting `(C)(x)` to an expression tree, where the introduced cast expression is classified as compiler-generated. Note that this case also covers the case where `E` is `dynamic` and where `x` is converted to `IEnumerable`.
 >
-> ### The iteration variable
+> #### The iteration variable
 >
 > The iteration variable declaration `V v` is converted to an expression tree by constructing an expression `iterationVariable` as follows, where `T` is the element type, as defined earlier.
 >
 > If `V` is the identifier `var` and no type named `var` is in scope, substitute `T` for `V`. Treat the resulting `V v` as a *local_variable_declaration* and follow the steps in [Local variables](variables.md#local-variables) to construct the expression `iterationVariable`.
 >
-> ### Element conversion
+> #### Element conversion
 >
 > An expression `elementConversion` is constructed if `T` differs from `V`, where `T` is the element type, as defined earlier, and where `V` is the (possibly inferred) iteration variable type, as defined in the previous section, as follows.
 >
@@ -1368,17 +1369,17 @@ the type of `n` is inferred to be `int`, the element type of `numbers`.
 >
 > Otherwise, `elementConversion` is defined as the `default` literal.
 >
-> ### The embedded statement
+> #### The embedded statement
 >
 > The *embedded_statement* in the *foreac_statement* is converted to an expression tree `bodyExpr`, where the iteration variable is assumed to be in scope and all use sites get converted to `iterationVariable`.
 >
-> ### `break` and `continue` labels
+> #### `break` and `continue` labels
 >
 > Construct expressions `breakLabel` and `continueLabel` refer to variables holding expression tree nodes representing compiler-generated labels according to the rules described in [Labeled statements](#labeled-statements). If no `break` statement exists within the body of the iteration statement, targeting the current iteration statement, `breakLabel` will be the `default` literal instead. If no `continue` statement exists within the body of the iteration statement, targeting the current iteration statement, `continueLabel` will be the `default` literal instead.
 >
 > The rationale of these overloads is to allow for efficient expression tree libraries that can detect control flow behavior associated with the loop, without having to perform complex analysis of the iteration statement body.
 >
-> ### Constructing the expression tree
+> #### Constructing the expression tree
 >
 > Given the constituents constructed in the preceding steps, the expression tree for the *foreach_statement* is constructed as follows.
 >
@@ -1905,11 +1906,11 @@ The end point of a `try` statement is reachable if both of the following are tru
 >
 > Translation of a *try_statement* to a query expression tree produces a compile-time error. When converted to a generalized expression tree, the following steps are taken.
 >
-> ### Convert `try` and `finally` blocks
+> #### Convert `try` and `finally` blocks
 >
 > Construct an expression `bodyExpr` by converting the *block* immediately following the `try` keyword to an expression tree. Next, construct an expression `finallyExpr` by converting the *block* immediately following the `finally` keyword to an expression tree, if it exists.
 >
-> ### Convert `catch` clauses
+> #### Convert `catch` clauses
 >
 > Then, construct expressions `catchExpr_i` (where `1 <= i <= N`, where `N` is the number of *catch_clause*s) by translating each *catch_clause* as follows.
 >
@@ -1996,7 +1997,7 @@ The end point of a `try` statement is reachable if both of the following are tru
 >    * Or we could flatten the hierarchy and do away with "info" nodes, though often nodes are structurally the same (reflective of the grammar of the language) but are semantically bound in a different manner. By having "info" nodes, variations in syntactic shape and variations in semantic binding info never clash and don't lead to a cartesian product of overloads. It also allows for reuse of "info" nodes (e.g. `ConvertInfo`).
 > * Decide if we should make the factory methods reflect the language construct using grammar lingo (`Catch` or `CatchClause`) or make them a concatenation of keywords involve (`Catch` versus `CatchWhen`). The latter could help here to reduce overloading.
 >
-> ### Construct the expression tree
+> #### Construct the expression tree
 >
 > Conversion to an expression tree proceeds as follows, using the expressions constructed in the sections above.
 >
