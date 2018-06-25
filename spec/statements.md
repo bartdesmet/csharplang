@@ -511,6 +511,7 @@ The end point of an `if` statement is reachable if the end point of at least one
 >
 > ***TODO***
 > * Decide on the strategy for info nodes. Even though these may be redundant now, it provides extensibility if statements change in the future from a semantic fashion. For example, if they allow binding to APIs and start requiring reflection info objects. A good example is `Lambda` where async lambdas were easily modeled by defining a new info factory, while keeping the syntactic structure of the node the same. Note that expression tree libraries can overload factory methods `X` to vary the return types based on the type returned from `XInfo`. For example, `Q.Lambda<T>(Q.LambdaInfo(...), ...)` may return a `LambdaQuote<T>` while `Q.Lambda<T>(Q.AsyncLambdaInfo(...), ...)` may return an `AsyncLambdaQuote<T>` if the library wishes to do so.
+> * Decide if we should make the factory methods reflect the language construct using grammar lingo (`If`) or make them a concatenation of keywords involve (`If` versus `IfElse`). The latter could help here to reduce overloading.
 
 ### The switch statement
 
@@ -974,6 +975,7 @@ The end point of a `do` statement is reachable if at least one of the following 
 >
 > ***TODO***
 > * C# 7 adds scoped locals to the bound node, due to declaration expressions. These would be passed to the `DoInfo` factory method as a fourth argument supplied with the result of the `ScopeInfo` factory method.
+> * Decide if we should make the factory methods reflect the language construct using grammar lingo (`Do`) or make them a concatenation of keywords involve (`DoWhile`).
 
 ### The for statement
 
@@ -1959,6 +1961,7 @@ The end point of a `try` statement is reachable if both of the following are tru
 >      * An expression tree library could easily perform type erasure by rewriting "info" nodes while leaving the rest of the tree shape the same (e.g. by changing them for `string`-based nodes to refer to types or members by name).
 >      * Discovering all binding information would also be very easy if an expression tree library has a visitor that visits all "info" nodes.
 >    * Or we could flatten the hierarchy and do away with "info" nodes, though often nodes are structurally the same (reflective of the grammar of the language) but are semantically bound in a different manner. By having "info" nodes, variations in syntactic shape and variations in semantic binding info never clash and don't lead to a cartesian product of overloads. It also allows for reuse of "info" nodes (e.g. `ConvertInfo`).
+> * Decide if we should make the factory methods reflect the language construct using grammar lingo (`Catch` or `CatchClause`) or make them a concatenation of keywords involve (`Catch` versus `CatchWhen`). The latter could help here to reduce overloading.
 >
 > ### Construct the expression tree
 >
