@@ -267,6 +267,32 @@ Execution of a labeled statement corresponds exactly to execution of the stateme
 
 In addition to the reachability provided by normal flow of control, a labeled statement is reachable if the label is referenced by a reachable `goto` statement. (Exception: If a `goto` statement is inside a `try` that includes a `finally` block, and the labeled statement is outside the `try`, and the end point of the `finally` block is unreachable, then the labeled statement is not reachable from that `goto` statement.)
 
+> __Expression Tree Conversion Translation Steps__
+>
+> Translation of an *labeled_statement* to a query expression tree produces a compile-time error. When converted to a generalized expression tree, it is translated into:
+>
+> ```csharp
+> Q.LabeledStatement(info, stmtExpr)
+> ```
+>
+> where `stmtExpr` is the result of converting *statement* to an expression tree, and `info` is
+>
+> ```csharp
+> Q.LabeledStatement(default(Q.Flags), label)
+> ```
+>
+> where `label` is a variable holding a node representing the label declaration, as follows:
+>
+> ```csharp
+> var t = Q.Label(flags, name);
+> ```
+>
+> where `t` is a compiler-generated identifier that is otherwise invisible, `name` is the result of converting *identifier* to an expression tree, and `flags` is `Q.Flags.CompilerGenerated` if the label is compiler-generated, or `default(Q.Flags)` otherwise.
+>
+> This variable is introduced in the scope of the expression tree conversion. All references to the label by `goto` statements, or by `break` or `continue` statements, use the variable `t` corresponding to the referenced label.
+>
+> Note that the declaration and assignment of the variable `t` will be introduced by the compiler before the first declaration or reference to a label, whichever occurs first.
+
 ## Declaration statements
 
 A *declaration_statement* declares a local variable or constant. Declaration statements are permitted in blocks, but are not permitted as embedded statements.
@@ -1346,6 +1372,12 @@ the type of `n` is inferred to be `int`, the element type of `numbers`.
 >
 > The *embedded_statement* in the *foreac_statement* is converted to an expression tree `bodyExpr`, where the iteration variable is assumed to be in scope and all use sites get converted to `iterationVariable`.
 >
+> ### `break` and `continue` labels
+>
+> Construct expressions `breakLabel` and `continueLabel` refer to variables holding expression tree nodes representing compiler-generated labels according to the rules described in [Labeled statements](#labeled-statements). If no `break` statement exists within the body of the iteration statement, targeting the current iteration statement, `breakLabel` will be the `default` literal instead. If no `continue` statement exists within the body of the iteration statement, targeting the current iteration statement, `continueLabel` will be the `default` literal instead.
+>
+> The rationale of these overloads is to allow for efficient expression tree libraries that can detect control flow behavior associated with the loop, without having to perform complex analysis of the iteration statement body.
+>
 > ### Constructing the expression tree
 >
 > Given the constituents constructed in the preceding steps, the expression tree for the *foreach_statement* is constructed as follows.
@@ -1357,20 +1389,21 @@ the type of `n` is inferred to be `int`, the element type of `numbers`.
 > where `info` is
 >
 > ```csharp
-> Q.ForEachInfo(flags, elementConversion)
+> Q.ForEachInfo(flags, elementConversion, breakLabel, continueLabel)
 > ```
 >
 > if the `C` is an array type, `IEnumerable`, or `IEnumerable<T>`, or
 >
 > ```csharp
-> Q.ForEachInfo(flags, elementConversion, getEnumeratorMethod, moveNextMethod, getCurrentMethod)
+> Q.ForEachInfo(flags, elementConversion, getEnumeratorMethod, moveNextMethod, getCurrentMethod, breakLabel, continueLabel)
 > ```
 >
-> otherwise, where `getEnumerator` method is an expression of type `MethodInfo` representing the bound `GetEnumerator` method,  `moveNextMethod` method is an expression of type `MethodInfo` representing the bound `MoveNext` method, and  `getCurrentMethod` method is an expression of type `MethodInfo` representing the `get` accessor of the bound `Current` property.
+> otherwise, where `getEnumerator` method is an expression of type `MethodInfo` representing the bound `GetEnumerator` method, `moveNextMethod` method is an expression of type `MethodInfo` representing the bound `MoveNext` method, and  `getCurrentMethod` method is an expression of type `MethodInfo` representing the `get` accessor of the bound `Current` property.
 >
 > In all cases, `flags` is `Q.Flags.CheckedContext` if the *foreach_statement* occurs in a checked context, and `default(Q.Flags)` otherwise.
 >
 > ***TODO***
+> * Address overload inconsistencies for different loop constructs with respect to optionality of `breakLabel` and/or `continueLabel` arguments.
 > * Should the collection conversion be applied as a `(T)(x)` rewrite step (similar to what's done for many other nodes), or be modeled as a collection conversion passed to `ForEachInfo`?
 > * Should enumerator conversion, which is omitted from the spec but needed in some cases to convert the enumerator to `object` in order to perform a `null`-check in the `finally` block? Likely this can be left to the reduction or compilation stage in the expression tree library where a `ReferenceEqual` node could easily be used. A conversion to `object` is well-understood without passing C# compiler conversion info to the factory.
 > * Should information about the bound `Dispose` method be passed as well? E.g. to avoid boxing for value type enumerators (or can we rely on constrained virtual calls being emitted for these cases by a reduction/lowering phase in the library)?
