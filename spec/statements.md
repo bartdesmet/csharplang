@@ -1308,6 +1308,72 @@ foreach (var n in numbers) Console.WriteLine(n);
 ```
 the type of `n` is inferred to be `int`, the element type of `numbers`.
 
+> __Expression Tree Conversion Translation Steps__
+>
+> Translation of a *foreach_statement*
+>
+> ```csharp
+> foreach (V v in x) embedded_statement
+> ```
+>
+> to a query expression tree produces a compile-time error. When converted to a generalized expression tree, the following steps are taken.
+>
+> ### The collection expression
+>
+> The collection *expression* `x` is converted to an expression tree by constructing an expression `collectionExpr` as follows, where `X` is the type of *expression*, and `C` is the collection type as defined earlier.
+>
+> If `E` is an array type, or the collection type `C` is identical to `X`, then `collectionExpr` is the result of converting `x` to an expression tree.
+>
+> Otherwise, `collectionExpr` is the result of converting `(C)(x)` to an expression tree, where the introduced cast expression is classified as compiler-generated. Note that this case also covers the case where `E` is `dynamic` and where `x` is converted to `IEnumerable`.
+>
+> ### The iteration variable
+>
+> The iteration variable declaration `V v` is converted to an expression tree by constructing an expression `iterationVariable` as follows, where `T` is the element type, as defined earlier.
+>
+> If `V` is the identifier `var` and no type named `var` is in scope, substitute `T` for `V`. Treat the resulting `V v` as a *local_variable_declaration* and follow the steps in [Local variables](variables.md#local-variables) to construct the expression `iterationVariable`.
+>
+> ### Element conversion
+>
+> An expression `elementConversion` is constructed if `T` differs from `V`, where `T` is the element type, as defined earlier, and where `V` is the (possibly inferred) iteration variable type, as defined in the previous section, as follows.
+>
+> Let `t` represent a local variable with a compiler-generated identifier `t` and type `T`. Then construct a cast expression `(V)t`, classified as compiler-generated, and follow the steps in [Cast expressions](expressions.md#cast-expressions) to construct a `Q.ConvertInfo` object, which becomes `elementConversion`. Note that this conversion supports dynamically bound conversion in case `T` is `dynamic` and `V` is not `dynamic`. Furthermore, note that if the *for_statement* occurs in a checked contet, the resulting `ConvertInfo` node will have the `Q.Flags.CheckedContext` flag specified.
+>
+> Otherwise, `elementConversion` is defined as the `default` literal.
+>
+> ### The embedded statement
+>
+> The *embedded_statement* in the *foreac_statement* is converted to an expression tree `bodyExpr`, where the iteration variable is assumed to be in scope and all use sites get converted to `iterationVariable`.
+>
+> ### Constructing the expression tree
+>
+> Given the constituents constructed in the preceding steps, the expression tree for the *foreach_statement* is constructed as follows.
+>
+> ```csharp
+> Q.ForEach(info, iterationVariable, collectionExpr, bodyExpr)
+> ```
+>
+> where `info` is
+>
+> ```csharp
+> Q.ForEachInfo(flags, elementConversion)
+> ```
+>
+> if the `C` is an array type, `IEnumerable`, or `IEnumerable<T>`, or
+>
+> ```csharp
+> Q.ForEachInfo(flags, elementConversion, getEnumeratorMethod, moveNextMethod, getCurrentMethod)
+> ```
+>
+> otherwise, where `getEnumerator` method is an expression of type `MethodInfo` representing the bound `GetEnumerator` method,  `moveNextMethod` method is an expression of type `MethodInfo` representing the bound `MoveNext` method, and  `getCurrentMethod` method is an expression of type `MethodInfo` representing the `get` accessor of the bound `Current` property.
+>
+> In all cases, `flags` is `Q.Flags.CheckedContext` if the *foreach_statement* occurs in a checked context, and `default(Q.Flags)` otherwise.
+>
+> ***TODO***
+> * Should the collection conversion be applied as a `(T)(x)` rewrite step (similar to what's done for many other nodes), or be modeled as a collection conversion passed to `ForEachInfo`?
+> * Should enumerator conversion, which is omitted from the spec but needed in some cases to convert the enumerator to `object` in order to perform a `null`-check in the `finally` block? Likely this can be left to the reduction or compilation stage in the expression tree library where a `ReferenceEqual` node could easily be used. A conversion to `object` is well-understood without passing C# compiler conversion info to the factory.
+> * Should information about the bound `Dispose` method be passed as well? E.g. to avoid boxing for value type enumerators (or can we rely on constrained virtual calls being emitted for these cases by a reduction/lowering phase in the library)?
+> * Should `elementConversion` be allowed to be `default` or should we emit an identity conversion instead?
+
 ## Jump statements
 
 Jump statements unconditionally transfer control.
