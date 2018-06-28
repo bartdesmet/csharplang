@@ -1520,6 +1520,7 @@ The *member_access* is evaluated and classified as follows:
 >
 > ***TODO***
 > * Describe quirk https://github.com/dotnet/roslyn/issues/4471 for query expression trees.
+> * Member access for a dynamic target may also be used for purposes of an lval, requiring a binder for the set operation. Define what the binder here means.
 >
 > ### Instance field access
 >
@@ -1729,6 +1730,7 @@ The intuitive effect of the resolution rules described above is as follows: To l
 > * Evaluate options for the dynamic case:
 >   * create a specification for the construction of `binder` (can also be used to specify `dynamic` behavior outside the context of expression trees) and consider making more properties on the `Microsoft.CSharp.RuntimeBinder` library types publicly accessable so expression tree libraries can inspect this info, or,
 >   * steer away from reusing `Microsoft.CSharp` and introduce a `CallInfo` factory overload for dynamic binding (e.g. a `(Q.DynamicFlags flags, Type context, string name, Type[] typeArgs, params A[] argumentInfo)` overload, where `A` is built through factory invocations as well).
+> * What's our stance on `[Conditional(...)]` attributes applied to methods? Do we remove invocations to those, as is the case today for query expression trees? If not, we need `#define` symbolic info to be passed to the `Info` factory so the expression library can make decisions (or decide to ignore the info passed).
 
 #### Extension method invocations
 
@@ -6989,6 +6991,7 @@ Note that unlike an uncaptured variable, a captured local variable can be simult
 >       * Multiple references to the same outer variable do not duplicate the `Member(Constant(...), ...)` pattern in all these use sites. A proper variable node is used, which is bound in the environment.
 >       * Users can choose to inline these bindings if they don't care about analyzing expression trees, e.g. if they just want to evaluate them.
 >       * Outer variables are a well-described construct in the language specification, and a one-to-one mapping onto a `Q.Environment` factory (which could be named `OuterVariables` or whatever makes most sense) is easy to describe.
+>       * It may become possible to reuse expression tree instances (much like cached delegate instances) but just varying the binding environment decoration on top of an otherwise static expression tree object (which is solely determined by the use site). We would have to make assumptions about the expression tree library factory methods being pure functions that merely construct an immutable object. There's no way to enforce such behavior, so it'd have to be part of the contract. Obviously, we could also provide a flag on the `ExpressionBuilderAttribute` to disable reuse if that's what a library wants. Right now, with query expression trees, using these in a loop is expensive in terms of allocations of the same structure over and over again, modulo the leaf `Constant(closure)` nodes. By hoisting up the environment, the whole tree becomes reusable.
 
 #### Instantiation of local variables
 
@@ -7950,10 +7953,16 @@ the assignments are all invalid, since `r.A` and `r.B` are not variables.
 > where `info` is
 >
 > ```csharp
+> Q.AssignInfo(flags, binder)
+> ```
+>
+> if the assignment is dynamically bound, where `binder` is an expression of type `Microsoft.CSharp.RuntimeBinder.CallSiteBinder` representing the dynamic operation, or
+>
+> ```csharp
 > Q.AssignInfo(flags)
 > ```
 >
-> where `flags` is
+> otherwise, where `flags` is
 >
 > * `Q.Flags.ResultDiscarded` if the expression occurs in an *expression_statement* ([Expression statements](statements.md#expression-statements)), or,
 > * `default(Q.Flags)` otherwise.
@@ -7961,6 +7970,7 @@ the assignments are all invalid, since `r.A` and `r.B` are not variables.
 > ***TODO***
 > * Review the need for `info` nodes when no additional info is needed, with an eye on future extensions (or do we evolve by adding new factory methods only?).
 > * An alternative option could be to avoid rewriting `b` to `(T)b` but parameterize `AssignInfo` on a `ConvertInfo` describing the conversion applied to the right-hand side. This gets more tricky for compound assignment which may involve a conversion applied to the left-hand side as well (but we could have two such converts if needed).
+> * Review what the left hand side will look like if the operation is dynamically bound. In particular, we need a `SetBinder` for regular assignment, and a `GetBinder` and a `SetBinder` for compound assignment. We also don't want a `GetBinder` for regular assignment, so it'd be odd for `aExpr` to contain such an unused binder. Maybe we need `DynamicAssign` to deal with `E.P` and `E[Ei]` cases, where `E` and/or `Ei` is dynamic?
 
 ### Compound assignment
 
@@ -8076,6 +8086,9 @@ the lifted operator `+(int?,int?)` is used.
 > * `default(Q.Flags)` if none of the flags apply.
 >
 > Note that `leftConversion` and `finalConversion` may be `default` literals, so the expression tree library should define `MAssignInfo` methods such that target typing results in no ambiguity during overload resolution.
+>
+> ***TODO***
+> * Define the dynamic case where left is `E.P` or `E[Ei]`. We need a place to pass a `SetBinder` and have to assume the left expression has a `GetBinder`. Maybe we need `DynamicAssign` to deal with `E.P` and `E[Ei]` cases, where `E` and/or `Ei` is dynamic?
 
 ### Event assignment
 
