@@ -866,6 +866,7 @@ The end point of a `switch` statement is reachable if at least one of the follow
 > ***TODO***
 > * C# 7 adds scoped locals to the bound node, due to declaration expressions. These would be passed to the `SwitchInfo` factory method as a third argument supplied with the result of the `ScopeInfo` factory method.
 > * Review the general stance of modeling optional nodes, such as the break label here. Having a redundant node may not be a big deal, but it incurs an allocation. Omitting redundant nodes should either consistently be done using overload "ladders" or be modeled using a `default` literal (reducing the number of overloads at the expense of having potentially many default values).
+> * Do we want to pass the `MethodInfo` for the string equality implementation to the `SwitchInfo` factory as well?
 
 ## Iteration statements
 
